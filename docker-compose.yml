@@ -1,0 +1,109 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mcp-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcp-secret}
+      POSTGRES_DB: ${POSTGRES_DB:-mcp_market}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mcp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: mcp-redis
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: mcp-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+      - "4317:4317"
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: mcp-prometheus
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  legacy-api:
+    build:
+      context: .
+      dockerfile: servers/legacy-api/Dockerfile
+    container_name: mcp-legacy-api
+    environment:
+      HTTP_PORT: 9002
+    ports:
+      - "9002:9002"
+
+  mock-mcp:
+    build:
+      context: ./servers/mock-mcp
+    container_name: mcp-mock-mcp
+    environment:
+      HTTP_PORT: 9003
+    ports:
+      - "9003:9003"
+
+  gateway:
+    build:
+      context: ./gateway
+    container_name: mcp-gateway
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://mcp:mcp-secret@postgres:5432/mcp_market?sslmode=disable}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      LEGACY_API_URL: ${LEGACY_API_URL:-http://legacy-api:9002}
+      MOCK_MCP_URL: ${MOCK_MCP_URL:-http://mock-mcp:9003}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-jaeger:4318}
+      SEED_ON_STARTUP: ${SEED_ON_STARTUP:-true}
+      OPENAPI_SPEC_URL: ${OPENAPI_SPEC_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+      legacy-api:
+        condition: service_started
+      mock-mcp:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    command: ["serve"]
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8080}
+    container_name: mcp-web
+    depends_on:
+      - gateway
+    ports:
+      - "5173:5173"
+
+volumes:
+  pgdata:

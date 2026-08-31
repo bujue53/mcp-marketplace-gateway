@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+node_modules
+web/node_modules
+web/dist
+gateway/bin
+__pycache__
+*.pyc
+.venv
+docs
+Makefile
+README.md

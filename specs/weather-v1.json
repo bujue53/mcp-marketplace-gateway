@@ -1,0 +1,96 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Legacy Weather API",
+    "description": "一个遗留的 REST 天气服务。本文件作为 OpenAPI 3.x 规范输入，由网关的「OpenAPI → MCP 工具自动生成器」转换为可被 Agent 调用的 MCP 工具。",
+    "version": "1.0.0"
+  },
+  "servers": [{ "url": "http://legacy-api:9002" }],
+  "paths": {
+    "/weather/current": {
+      "get": {
+        "operationId": "weather_current",
+        "summary": "获取指定城市的当前天气",
+        "tags": ["weather"],
+        "parameters": [
+          {
+            "name": "city",
+            "in": "query",
+            "required": true,
+            "description": "城市名称，例如 东莞、上海",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "当前天气",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "city": { "type": "string" },
+                    "temperature_c": { "type": "number" },
+                    "condition": { "type": "string" },
+                    "humidity": { "type": "integer" },
+                    "updated_at": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/weather/forecast": {
+      "get": {
+        "operationId": "weather_forecast",
+        "summary": "获取指定城市的多日天气预报",
+        "tags": ["weather"],
+        "parameters": [
+          {
+            "name": "city",
+            "in": "query",
+            "required": true,
+            "description": "城市名称",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "description": "预报天数，默认 3",
+            "schema": { "type": "integer", "default": 3 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "预报列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "city": { "type": "string" },
+                    "days": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": { "type": "string" },
+                          "temp_low": { "type": "number" },
+                          "temp_high": { "type": "number" },
+                          "condition": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

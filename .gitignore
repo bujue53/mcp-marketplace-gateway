@@ -1,0 +1,42 @@
+# dependencies
+node_modules/
+vendor/
+
+# build artifacts
+dist/
+build/
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# go
+*.test
+*.out
+coverage/
+gateway/bin/
+
+# env
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+logs/
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# infra data
+data/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
