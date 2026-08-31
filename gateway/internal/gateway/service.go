@@ -23,10 +23,11 @@ type Service struct {
 	st      *store.Store
 	mu      sync.RWMutex
 	bindings map[string]*wrapper.Handle // server_id -> OpenAPI 绑定（自动生成工具专用）
+	skills   map[string]*wrapper.SkillsAdapter
 }
 
 func NewService(st *store.Store) *Service {
-	return &Service{st: st, bindings: map[string]*wrapper.Handle{}}
+	return &Service{st: st, bindings: map[string]*wrapper.Handle{}, skills: map[string]*wrapper.SkillsAdapter{}}
 }
 
 // RegisterOpenAPI 把一个 OpenAPI 绑定注册给某 server（用于自动生成工具）。
@@ -42,6 +43,19 @@ func (s *Service) getOpenAPI(serverID int64) *wrapper.Handle {
 	return s.bindings[fmt.Sprintf("%d", serverID)]
 }
 
+// RegisterSkills 注册一个 Skills→MCP 适配器（按 server id）。
+func (s *Service) RegisterSkills(serverID int64, a *wrapper.SkillsAdapter) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.skills[fmt.Sprintf("%d", serverID)] = a
+}
+
+func (s *Service) getSkills(serverID int64) *wrapper.SkillsAdapter {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.skills[fmt.Sprintf("%d", serverID)]
+}
+
 // Invoke 执行工具调用，并记录成本、延迟与审计数据交给上层。
 func (s *Service) Invoke(ctx context.Context, tool *model.MCPTool, args json.RawMessage) (*mcp.CallToolResult, error) {
 	sv, err := s.st.GetServerByID(ctx, tool.ServerID)
@@ -53,7 +67,9 @@ func (s *Service) Invoke(ctx context.Context, tool *model.MCPTool, args json.Raw
 	}
 
 	var result *mcp.CallToolResult
-	if h := s.getOpenAPI(sv.ID); h != nil {
+	if a := s.getSkills(sv.ID); a != nil {
+		result, err = a.CallTool(ctx, tool.Name, args)
+	} else if h := s.getOpenAPI(sv.ID); h != nil {
 		result, err = h.CallTool(ctx, tool.Name, args)
 	} else {
 		client := mcp.NewClient(sv.EndpointURL, "")

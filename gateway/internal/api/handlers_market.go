@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/yafeng/mcp-marketplace/gateway/internal/auth"
+	"github.com/yafeng/mcp-marketplace/gateway/internal/model"
 	"github.com/yafeng/mcp-marketplace/gateway/internal/store"
 )
 
@@ -36,7 +37,8 @@ func (s *Server) GetTool(c *gin.Context) {
 }
 
 type rateReq struct {
-	Rating int `json:"rating" binding:"required"`
+	Rating  int    `json:"rating" binding:"required"`
+	Comment string `json:"comment"`
 }
 
 func (s *Server) RateTool(c *gin.Context) {
@@ -51,7 +53,7 @@ func (s *Server) RateTool(c *gin.Context) {
 		return
 	}
 	id := parseID(c.Param("id"))
-	if err := s.reg.RateTool(c.Request.Context(), id, u.ID, req.Rating); err != nil {
+	if err := s.reg.RateTool(c.Request.Context(), id, u.ID, req.Rating, req.Comment); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -80,6 +82,34 @@ func (s *Server) ConnectTool(c *gin.Context) {
 		"tool":      tool.Name,
 		"endpoint":  "/mcp",
 		"access":    "granted",
+		"config":    buildClientConfig(tool),
 	})
 }
 
+// Comments 返回某工具的评分评论。
+func (s *Server) Comments(c *gin.Context) {
+	id := parseID(c.Param("id"))
+	items, err := s.st.ListComments(c.Request.Context(), id, 20)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if items == nil {
+		items = []model.ToolComment{}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+// buildClientConfig 生成可直接粘贴到 MCP 客户端（如 Claude Desktop）的接入配置片段。
+func buildClientConfig(tool *model.MCPTool) map[string]any {
+	base := "/mcp"
+	_ = tool
+	return map[string]any{
+		"mcpServers": map[string]any{
+			"mcp-gateway": map[string]any{
+				"url":     "http://localhost:8080" + base,
+				"headers": map[string]any{"Authorization": "Bearer <你的JWT>"},
+			},
+		},
+	}
+}

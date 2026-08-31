@@ -19,11 +19,15 @@ type Server struct {
 	reg *registry.Service
 	gw  *gateway.Service
 	mw  *middleware.MW
+	sink *store.CallSink
 }
 
 func New(cfg *config.Config, st *store.Store, reg *registry.Service, gw *gateway.Service, mw *middleware.MW) *Server {
-	return &Server{cfg: cfg, st: st, reg: reg, gw: gw, mw: mw}
+	return &Server{cfg: cfg, st: st, reg: reg, gw: gw, mw: mw, sink: store.NewCallSink(st, 2048)}
 }
+
+// CloseSink 关闭异步调用日志（服务退出时调用）。
+func (s *Server) CloseSink() { s.sink.Close() }
 
 // Router 构建完整 gin 路由。
 func (s *Server) Router() *gin.Engine {
@@ -43,6 +47,7 @@ func (s *Server) Router() *gin.Engine {
 			servers.POST("", s.CreateServer)
 			servers.GET("", s.ListServers)
 			servers.GET("/:id", s.GetServer)
+			servers.GET("/:id/health", s.CheckServerHealth)
 			servers.DELETE("/:id", s.DeleteServer)
 			servers.POST("/generate", s.GenerateFromOpenAPI)
 			servers.POST("/:id/sync", s.SyncServer)
@@ -53,8 +58,15 @@ func (s *Server) Router() *gin.Engine {
 			mkt.GET("/tools", s.MarketplaceTools)
 		}
 		api.GET("/tools/:id", s.GetTool)
+		api.GET("/tools/:id/comments", s.Comments)
 		api.POST("/tools/:id/rate", s.mw.Auth(), s.RateTool)
 		api.POST("/tools/:id/connect", s.mw.Auth(), s.ConnectTool)
+
+		api.POST("/wrapper/skeleton", s.mw.Auth(), s.GenerateSkeleton)
+		api.POST("/wrapper/skills", s.mw.Auth(), s.ConvertSkills)
+
+		api.GET("/audit/alerts", s.mw.Auth(), s.AuditAlerts)
+		api.GET("/audit/report", s.mw.Auth(), s.AuditReport)
 
 		gwa := api.Group("/gateway")
 		gwa.Use(s.mw.Auth(), s.mw.RateLimit())
@@ -73,4 +85,3 @@ func (s *Server) Router() *gin.Engine {
 
 	return r
 }
-

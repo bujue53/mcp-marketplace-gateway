@@ -16,15 +16,19 @@ export function Dashboard() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [daily, setDaily] = useState<Record<string, number>>({});
   const [top, setTop] = useState<MCPTool[]>([]);
+  const [report, setReport] = useState<{ summary: Record<string, number>; sensitive_hot: { name: string; calls: number }[] } | null>(null);
+  const [alerts, setAlerts] = useState<{ severity: string; rule: string; created_at: string }[]>([]);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (!token) return;
-    Promise.all([api.statsSummary(token), api.statsDaily(token, 7), api.statsTop(token, 10)])
-      .then(([s, d, t]) => {
+    Promise.all([api.statsSummary(token), api.statsDaily(token, 7), api.statsTop(token, 10), api.auditReport(token), api.auditAlerts(token)])
+      .then(([s, d, t, r, a]) => {
         setSummary(s);
         setDaily(d.daily);
         setTop(t.items);
+        setReport(r);
+        setAlerts(a.items);
       })
       .catch((e) => setError((e as Error).message));
   }, [token]);
@@ -86,6 +90,39 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <h3 className="text-sm font-semibold text-slate-200">治理报告</h3>
+          <div className="mt-3 grid grid-cols-3 gap-3">
+            <MiniStat label="敏感工具" value={String(report?.summary?.sensitive_tools ?? '--')} />
+            <MiniStat label="近7天告警" value={String(report?.summary?.alerts_7d ?? '--')} />
+            <MiniStat label="累计成本" value={formatCost(report?.summary?.cost_micros ?? 0)} />
+          </div>
+          {report && report.sensitive_hot.length > 0 && (
+            <div className="mt-3 text-xs text-amber-400">
+              敏感工具高频调用：{report.sensitive_hot.map((h) => `${h.name}(${h.calls})`).join('、')}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <h3 className="text-sm font-semibold text-slate-200">异常调用告警</h3>
+          <div className="mt-3 max-h-48 space-y-2 overflow-auto">
+            {alerts.length === 0 ? (
+              <div className="text-sm text-slate-500">暂无告警</div>
+            ) : (
+              alerts.map((a, i) => (
+                <div key={i} className="rounded-lg bg-slate-950 px-3 py-2 text-xs">
+                  <span className={a.severity === 'critical' ? 'text-red-400' : 'text-amber-400'}>{a.severity}</span>
+                  <span className="ml-2 text-slate-300">{a.rule}</span>
+                  <span className="ml-2 text-slate-500">{a.created_at}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -104,3 +141,11 @@ function formatCost(micros: number) {
   return `$${usd.toFixed(4)}`;
 }
 
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-slate-950 p-3">
+      <div className="text-[11px] text-slate-500">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-slate-100">{value}</div>
+    </div>
+  );
+}

@@ -36,6 +36,8 @@ type MCPServer struct {
 	Transport   string    `json:"transport"` // streamable_http | sse
 	AuthType    string    `json:"auth_type"`  // none | bearer | oauth2
 	Status      string    `json:"status"`     // online | offline
+	Healthy     bool      `json:"healthy"`
+	LastHealthAt *time.Time `json:"last_health_at,omitempty"`
 	OwnerID     int64     `json:"owner_id"`
 	Tags        []string  `json:"tags"`       // 数据库存 text[] 映射为 []string
 	CreatedAt   time.Time `json:"created_at"`
@@ -54,6 +56,7 @@ type MCPTool struct {
 	OutputSchema JSON            `json:"output_schema"`
 	CostModel    JSON            `json:"cost_model"`
 	IsGenerated  bool            `json:"is_generated"`
+	Sensitive    bool            `json:"sensitive"`
 	Version      string          `json:"version"`
 	Rating       float64         `json:"rating"`
 	RatingCount  int64           `json:"rating_count"`
@@ -81,7 +84,32 @@ type ToolCall struct {
 	TokensIn   int       `json:"tokens_in"`
 	TokensOut  int       `json:"tokens_out"`
 	CostMicros int64     `json:"cost_micros"`
+	ArgumentSummary string `json:"argument_summary"`
 	CreatedAt  time.Time `json:"created_at"`
+}
+
+// ToolComment 评分评论。
+type ToolComment struct {
+	Rating   int    `json:"rating"`
+	Comment  string `json:"comment"`
+	Username string `json:"username"`
+}
+
+// AuditAlert 审计告警。
+type AuditAlert struct {
+	ID        int64     `json:"id"`
+	Severity  string    `json:"severity"`
+	Rule      string    `json:"rule"`
+	ToolID    int64     `json:"tool_id,omitempty"`
+	Detail    JSON      `json:"detail"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// SensitiveHot 敏感工具高频调用（用于告警）。
+type SensitiveHot struct {
+	ToolID int64  `json:"tool_id"`
+	Name   string `json:"name"`
+	Calls  int64  `json:"calls"`
 }
 
 // AuditLog 全链路审计日志。
@@ -100,4 +128,3 @@ type AuditLog struct {
 
 // KeyValue 通用小对象（内存/审计使用）。
 type KeyValue map[string]any
-

@@ -15,23 +15,41 @@ export function ToolDetail() {
   const [args, setArgs] = useState('{\n  "city": "东莞"\n}');
   const [result, setResult] = useState('');
   const [running, setRunning] = useState(false);
+  const [comment, setComment] = useState('');
+  const [config, setConfig] = useState('');
+  const [comments, setComments] = useState<{ rating: number; comment: string; username: string }[]>([]);
 
   useEffect(() => {
     api
       .getTool(Number(id))
       .then(setTool)
       .catch((e) => setError((e as Error).message));
+    api.toolComments(Number(id)).then((r) => setComments(r.items)).catch(() => setComments([]));
   }, [id]);
 
   const rate = async (rating: number) => {
     if (!token || !tool) return;
     try {
       await api.rateTool(tool.id, rating, token);
-      setNotice(`已评 ${rating} 星`);
+      setNotice(`已评 ${rating} 星${comment ? '，感谢评论' : ''}`);
       const updated = await api.getTool(tool.id);
       setTool(updated);
+      const r = await api.toolComments(tool.id);
+      setComments(r.items);
+      setComment('');
     } catch (e) {
       setNotice(`评分失败：${(e as Error).message}`);
+    }
+  };
+
+  const connect = async () => {
+    if (!token || !tool) return;
+    try {
+      const res = await api.connectTool(tool.id, token);
+      setConfig(JSON.stringify(res.config, null, 2));
+      setNotice(`已接入 ${res.tool}，权限已授予`);
+    } catch (e) {
+      setNotice(`接入失败：${(e as Error).message}`);
     }
   };
 
@@ -68,6 +86,48 @@ export function ToolDetail() {
         <div className="mt-4 flex items-center gap-3">
           <StarRating value={tool.rating} count={tool.rating_count} onRate={token ? rate : undefined} />
           <span className="text-xs text-slate-500">调用 {tool.call_count} 次 · v{tool.version}</span>
+        </div>
+
+        {token && (
+          <div className="mt-4 flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400">补充评论</span>
+              <input
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                placeholder="一句话评价（可选）"
+                className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs outline-none focus:border-brand-500"
+              />
+            </div>
+            <button onClick={() => rate(Math.round(tool.rating) || 5)} className="w-fit rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">
+              提交评分/评论
+            </button>
+          </div>
+        )}
+
+        {comments.length > 0 && (
+          <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+            <h3 className="text-sm font-semibold text-slate-200">用户评论</h3>
+            <div className="mt-2 space-y-2">
+              {comments.map((c, i) => (
+                <div key={i} className="rounded-lg bg-slate-950 px-3 py-2 text-xs">
+                  <span className="text-amber-400">{'★'.repeat(c.rating)}</span>
+                  <span className="ml-2 text-slate-300">{c.comment}</span>
+                  <span className="ml-2 text-slate-500">— {c.username}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <h3 className="text-sm font-semibold text-slate-200">接入配置</h3>
+          <button onClick={connect} className="mt-2 rounded-lg bg-brand-600 px-3 py-1.5 text-xs text-white hover:bg-brand-700">
+            一键接入并生成配置
+          </button>
+          {config && (
+            <pre className="mt-3 overflow-auto rounded-lg bg-slate-950 p-3 text-[11px] text-slate-300">{config}</pre>
+          )}
         </div>
 
         <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-5">
@@ -120,4 +180,3 @@ export function ToolDetail() {
     </div>
   );
 }
-

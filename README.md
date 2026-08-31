@@ -92,17 +92,25 @@ docker compose ps               # 查看服务状态
 | 前端市场页 | http://localhost:5173 |
 | Jaeger | http://localhost:16686 |
 | Prometheus | http://localhost:9090 |
+| mock-file / mock-db | http://localhost:9004 / http://localhost:9005 |
 
 浏览器打开前端市场页即可浏览 / 搜索 / 评分 / 一键接入 MCP 工具。
+
+运行权限测试与压测：
+
+```bash
+make test       # 网关单元测试（RBAC / JWT）
+make loadtest   # 调用压测（默认 50 RPS × 5s，输出 P50/P95/P99）
+```
 
 ## 五、端到端演示（Agent 通过网关调用自动包装的 MCP 工具）
 
 ```bash
 # 1. 登录拿 Token
 docker compose exec gateway sh -c './bin/ctl login --user admin --pass admin123'
-# 2. 用 Agent 客户端调用：MCP initialize → tools/list → tools/call
-python agents/mcp_client.py --base http://localhost:8080/mcp \
-  --api-key <你的token> --tool weather:current --args '{"city":"东莞"}'
+# 2. 用 Agent 客户端登录并调用：MCP initialize → tools/list → tools/call
+python agents/mcp_client.py --base http://localhost:8080 --mcp \
+  --tool weather_current --args '{"city":"东莞"}'
 ```
 
 该调用会经过：**JWT 鉴权 → RBAC 授权 → Redis 限流 → 熔断判断 → 成本计量 → 全链路审计日志**，最终命中由 OpenAPI 自动包装的 `legacy-weather-api` 工具。
@@ -112,14 +120,16 @@ python agents/mcp_client.py --base http://localhost:8080/mcp \
 **已落地**
 
 - MCP Server 注册中心（注册 / 发现 / 版本 / 权限 / 审计）
+- 注册中心健康检查与上下线（后台巡检，掉线自动 `offline`）
 - 工具市场 API 与前端页（浏览 / 搜索 / 评分 / 一键接入 / 调用统计）
-- Agent 网关（JWT + RBAC + 限流 + 熔断 + 成本计量 + 审计日志）
+- Agent 网关（JWT + RBAC + 限流 + 熔断 + 成本计量 + 全链路审计）
 - OpenAPI 3.x → MCP 工具自动生成器（核心亮点）
+- OpenAPI → Go/TS 骨架代码生成、Agent Skills → MCP 适配器
+- 异步调用日志（参数摘要 + 批量落库）、异常告警 / 治理周报
 - Docker Compose 一键部署 + mock 服务
 
 **待办扩展（加分项）**
 
-- Skills → MCP 适配器
 - ClickHouse 调用日志分析
 - 分布式高可用与一致性
 - 网关侧自动包装器 UI（在市场上「生成工具」）
@@ -127,4 +137,3 @@ python agents/mcp_client.py --base http://localhost:8080/mcp \
 ## 七、开发报告摘要
 
 详见 [docs/开发报告.md](docs/开发报告.md)（架构设计、模块划分、核心流程、包装器设计、限流/成本算法）。
-

@@ -33,12 +33,20 @@ export const api = {
     return request<MCPTool>(`/api/tools/${id}`);
   },
 
-  rateTool(id: number, rating: number, token: string) {
-    return request<{ ok: boolean }>(`/api/tools/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) }, token);
+  rateTool(id: number, rating: number, comment: string, token: string) {
+    return request<{ ok: boolean }>(`/api/tools/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating, comment }) }, token);
+  },
+
+  toolComments(id: number) {
+    return request<{ items: { rating: number; comment: string; username: string }[] }>(`/api/tools/${id}/comments`);
   },
 
   connectTool(id: number, token: string) {
-    return request<{ connected: boolean; endpoint: string; access: string }>(`/api/tools/${id}/connect`, { method: 'POST' }, token);
+    return request<{ connected: boolean; endpoint: string; access: string; config: Record<string, unknown> }>(
+      `/api/tools/${id}/connect`,
+      { method: 'POST' },
+      token,
+    );
   },
 
   invoke(token: string, toolName: string, arguments: Record<string, unknown>) {
@@ -60,6 +68,22 @@ export const api = {
   statsTop(token: string, limit = 10) {
     return request<{ items: MCPTool[] }>(`/api/stats/top?limit=${limit}`, {}, token);
   },
+
+  auditAlerts(token: string, limit = 20) {
+    return request<{ items: { id: number; severity: string; rule: string; tool_id: number; detail: object; created_at: string }[] }>(
+      `/api/audit/alerts?limit=${limit}`,
+      {},
+      token,
+    );
+  },
+
+  auditReport(token: string) {
+    return request<{ summary: Record<string, number>; sensitive_hot: { tool_id: number; name: string; calls: number }[] }>(
+      '/api/audit/report',
+      {},
+      token,
+    );
+  },
 };
 
 export function me(): User | null {
@@ -70,4 +94,3 @@ export function me(): User | null {
     return null;
   }
 }
-

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-const CATEGORIES = ['', 'weather', 'identity', 'commerce', 'general'];
+const CATEGORIES = ['', '数据库', '办公', '研发', '营销', 'weather', 'general'];
 
 export function SearchBar({
   onSearch,
@@ -42,4 +42,3 @@ export function SearchBar({
     </div>
   );
 }
-

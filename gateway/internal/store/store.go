@@ -74,10 +74,11 @@ func (s *Store) UpsertServer(ctx context.Context, sv *model.MCPServer) error {
 func (s *Store) GetServerByID(ctx context.Context, id int64) (*model.MCPServer, error) {
 	sv := &model.MCPServer{}
 	err := s.P.QueryRow(ctx,
-		`SELECT id,name,description,version,endpoint_url,transport,auth_type,status,owner_id,tags,created_at,updated_at
+		`SELECT id,name,description,version,endpoint_url,transport,auth_type,status,healthy,last_health_at,owner_id,tags,created_at,updated_at
 		 FROM mcp_servers WHERE id=$1`, id,
 	).Scan(&sv.ID, &sv.Name, &sv.Description, &sv.Version, &sv.EndpointURL, &sv.Transport,
-		&sv.AuthType, &sv.Status, &sv.OwnerID, &sv.Tags, &sv.CreatedAt, &sv.UpdatedAt)
+		&sv.AuthType, &sv.Status, &sv.Healthy, &sv.LastHealthAt, &sv.OwnerID,
+		&sv.Tags, &sv.CreatedAt, &sv.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -85,7 +86,7 @@ func (s *Store) GetServerByID(ctx context.Context, id int64) (*model.MCPServer, 
 }
 
 func (s *Store) ListServers(ctx context.Context, status string) ([]*model.MCPServer, error) {
-	q := `SELECT id,name,description,version,endpoint_url,transport,auth_type,status,owner_id,tags,created_at,updated_at
+	q := `SELECT id,name,description,version,endpoint_url,transport,auth_type,status,healthy,last_health_at,owner_id,tags,created_at,updated_at
 	      FROM mcp_servers`
 	args := []any{}
 	if status != "" {
@@ -102,7 +103,7 @@ func (s *Store) ListServers(ctx context.Context, status string) ([]*model.MCPSer
 	for rows.Next() {
 		sv := &model.MCPServer{}
 		if err := rows.Scan(&sv.ID, &sv.Name, &sv.Description, &sv.Version, &sv.EndpointURL,
-			&sv.Transport, &sv.AuthType, &sv.Status, &sv.OwnerID, &sv.Tags,
+			&sv.Transport, &sv.AuthType, &sv.Status, &sv.Healthy, &sv.LastHealthAt, &sv.OwnerID, &sv.Tags,
 			&sv.CreatedAt, &sv.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -119,16 +120,16 @@ func (s *Store) DeleteServer(ctx context.Context, id int64) error {
 
 func (s *Store) UpsertTool(ctx context.Context, t *model.MCPTool) error {
 	err := s.P.QueryRow(ctx,
-		`INSERT INTO mcp_tools(server_id,name,description,category,tags,input_schema,output_schema,cost_model,is_generated,version)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		`INSERT INTO mcp_tools(server_id,name,description,category,tags,input_schema,output_schema,cost_model,is_generated,sensitive,version)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		 ON CONFLICT(server_id, name) DO UPDATE
 		   SET description=EXCLUDED.description, category=EXCLUDED.category,
 		       tags=EXCLUDED.tags, input_schema=EXCLUDED.input_schema,
 		       output_schema=EXCLUDED.output_schema, cost_model=EXCLUDED.cost_model,
-		       is_generated=EXCLUDED.is_generated, version=EXCLUDED.version
+		       is_generated=EXCLUDED.is_generated, sensitive=EXCLUDED.sensitive, version=EXCLUDED.version
 		 RETURNING id, created_at`,
 		t.ServerID, t.Name, t.Description, t.Category, t.Tags, t.InputSchema,
-		t.OutputSchema, t.CostModel, t.IsGenerated, t.Version,
+		t.OutputSchema, t.CostModel, t.IsGenerated, t.Sensitive, t.Version,
 	).Scan(&t.ID, &t.CreatedAt)
 	if err != nil {
 		return err
@@ -143,7 +144,7 @@ func (s *Store) UpsertTool(ctx context.Context, t *model.MCPTool) error {
 func (s *Store) GetToolByID(ctx context.Context, id int64) (*model.MCPTool, error) {
 	return s.queryTool(ctx,
 		`SELECT t.id,t.server_id,t.name,t.description,t.category,t.tags,
-		        t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.version,t.created_at,
+		        t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.sensitive,t.version,t.created_at,
 		        COALESCE(AVG(r.rating),0)::float8, COUNT(DISTINCT r.id),
 		        (SELECT COUNT(*) FROM tool_calls c WHERE c.tool_id=t.id)
 		 FROM mcp_tools t
@@ -154,7 +155,7 @@ func (s *Store) GetToolByID(ctx context.Context, id int64) (*model.MCPTool, erro
 func (s *Store) GetToolByName(ctx context.Context, serverID int64, name string) (*model.MCPTool, error) {
 	return s.queryTool(ctx,
 		`SELECT t.id,t.server_id,t.name,t.description,t.category,t.tags,
-		        t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.version,t.created_at,
+		        t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.sensitive,t.version,t.created_at,
 		        COALESCE(AVG(r.rating),0)::float8, COUNT(DISTINCT r.id),
 		        (SELECT COUNT(*) FROM tool_calls c WHERE c.tool_id=t.id)
 		 FROM mcp_tools t
@@ -165,7 +166,7 @@ func (s *Store) GetToolByName(ctx context.Context, serverID int64, name string) 
 func (s *Store) FindToolByName(ctx context.Context, name string) (*model.MCPTool, error) {
 	return s.queryTool(ctx,
 		`SELECT t.id,t.server_id,t.name,t.description,t.category,t.tags,
-		        t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.version,t.created_at,
+		        t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.sensitive,t.version,t.created_at,
 		        COALESCE(AVG(r.rating),0)::float8, COUNT(DISTINCT r.id),
 		        (SELECT COUNT(*) FROM tool_calls c WHERE c.tool_id=t.id)
 		 FROM mcp_tools t
@@ -175,7 +176,7 @@ func (s *Store) FindToolByName(ctx context.Context, name string) (*model.MCPTool
 
 func (s *Store) ListTools(ctx context.Context, q, category string, limit int) ([]*model.MCPTool, error) {
 	sql := `SELECT t.id,t.server_id,t.name,t.description,t.category,t.tags,
-	               t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.version,t.created_at,
+	               t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.sensitive,t.version,t.created_at,
 	               COALESCE(AVG(r.rating),0)::float8, COUNT(DISTINCT r.id),
 	               (SELECT COUNT(*) FROM tool_calls c WHERE c.tool_id=t.id)
 	        FROM mcp_tools t
@@ -206,7 +207,7 @@ func (s *Store) ListTools(ctx context.Context, q, category string, limit int) ([
 		t := &model.MCPTool{}
 		if err := rows.Scan(&t.ID, &t.ServerID, &t.Name, &t.Description, &t.Category,
 			&t.Tags, &t.InputSchema, &t.OutputSchema, &t.CostModel, &t.IsGenerated,
-			&t.Version, &t.CreatedAt, &t.Rating, &t.RatingCount, &t.CallCount); err != nil {
+			&t.Sensitive, &t.Version, &t.CreatedAt, &t.Rating, &t.RatingCount, &t.CallCount); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -218,7 +219,7 @@ func (s *Store) queryTool(ctx context.Context, sql string, args ...any) (*model.
 	t := &model.MCPTool{}
 	err := s.P.QueryRow(ctx, sql, args...).Scan(
 		&t.ID, &t.ServerID, &t.Name, &t.Description, &t.Category, &t.Tags,
-		&t.InputSchema, &t.OutputSchema, &t.CostModel, &t.IsGenerated, &t.Version,
+		&t.InputSchema, &t.OutputSchema, &t.CostModel, &t.IsGenerated, &t.Sensitive, &t.Version,
 		&t.CreatedAt, &t.Rating, &t.RatingCount, &t.CallCount,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -229,11 +230,11 @@ func (s *Store) queryTool(ctx context.Context, sql string, args ...any) (*model.
 
 // ---- ratings ----
 
-func (s *Store) RateTool(ctx context.Context, toolID, userID int64, rating int) error {
+func (s *Store) RateTool(ctx context.Context, toolID, userID int64, rating int, comment string) error {
 	_, err := s.P.Exec(ctx,
-		`INSERT INTO tool_ratings(tool_id,user_id,rating) VALUES($1,$2,$3)
-		 ON CONFLICT(tool_id,user_id) DO UPDATE SET rating=EXCLUDED.rating, created_at=now()`,
-		toolID, userID, rating)
+		`INSERT INTO tool_ratings(tool_id,user_id,rating,comment) VALUES($1,$2,$3,$4)
+		 ON CONFLICT(tool_id,user_id) DO UPDATE SET rating=EXCLUDED.rating, comment=EXCLUDED.comment, created_at=now()`,
+		toolID, userID, rating, comment)
 	return err
 }
 
@@ -241,10 +242,10 @@ func (s *Store) RateTool(ctx context.Context, toolID, userID int64, rating int) 
 
 func (s *Store) InsertToolCall(ctx context.Context, c *model.ToolCall) error {
 	return s.P.QueryRow(ctx,
-		`INSERT INTO tool_calls(trace_id,user_id,tool_id,status_code,latency_ms,tokens_in,tokens_out,cost_micros)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, created_at`,
+		`INSERT INTO tool_calls(trace_id,user_id,tool_id,status_code,latency_ms,tokens_in,tokens_out,cost_micros,argument_summary)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, created_at`,
 		c.TraceID, c.UserID, c.ToolID, c.StatusCode, c.LatencyMs,
-		c.TokensIn, c.TokensOut, c.CostMicros,
+		c.TokensIn, c.TokensOut, c.CostMicros, c.ArgumentSummary,
 	).Scan(&c.ID, &c.CreatedAt)
 }
 
@@ -286,21 +287,26 @@ func (s *Store) TopTools(ctx context.Context, limit int) ([]*model.MCPTool, erro
 
 // StatsSummary 平台汇总：服务数、工具数、调用数、累计成本。
 func (s *Store) StatsSummary(ctx context.Context) (map[string]any, error) {
-	out := map[string]any{}
+	var servers, tools, calls, costMicros int64
 	err := s.P.QueryRow(ctx, `
 		SELECT (SELECT COUNT(*) FROM mcp_servers),
 		       (SELECT COUNT(*) FROM mcp_tools),
 		       (SELECT COUNT(*) FROM tool_calls),
-		       (SELECT COALESCE(SUM(cost_micros),0) FROM tool_calls)
-	`).Scan(&out["servers"], &out["tools"], &out["calls"], &out["cost_micros"])
-	return out, err
+		       (SELECT COALESCE(SUM(cost_micros),0)::bigint FROM tool_calls)
+	`).Scan(&servers, &tools, &calls, &costMicros)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"servers": servers, "tools": tools, "calls": calls, "cost_micros": costMicros,
+	}, nil
 }
 
 // TopToolsByCalls 按调用次数排序的前 N 个工具。
 func (s *Store) TopToolsByCalls(ctx context.Context, limit int) ([]*model.MCPTool, error) {
 	rows, err := s.P.Query(ctx,
 		`SELECT t.id,t.server_id,t.name,t.description,t.category,t.tags,
-		        t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.version,t.created_at,
+		        t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.sensitive,t.version,t.created_at,
 		        COALESCE(AVG(r.rating),0)::float8, COUNT(DISTINCT r.id),
 		        (SELECT COUNT(*) FROM tool_calls c WHERE c.tool_id=t.id) AS calls
 		 FROM mcp_tools t
@@ -316,7 +322,7 @@ func (s *Store) TopToolsByCalls(ctx context.Context, limit int) ([]*model.MCPToo
 		t := &model.MCPTool{}
 		if err := rows.Scan(&t.ID, &t.ServerID, &t.Name, &t.Description, &t.Category,
 			&t.Tags, &t.InputSchema, &t.OutputSchema, &t.CostModel, &t.IsGenerated,
-			&t.Version, &t.CreatedAt, &t.Rating, &t.RatingCount, &t.CallCount); err != nil {
+			&t.Sensitive, &t.Version, &t.CreatedAt, &t.Rating, &t.RatingCount, &t.CallCount); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -347,6 +353,106 @@ func (s *Store) PermissionAllowed(ctx context.Context, subjectType, subjectID st
 		return false, false, nil
 	}
 	return allowed, true, err
+}
+
+// ---- health & alerts & comments ----
+
+func (s *Store) UpdateServerHealth(ctx context.Context, id int64, status string, healthy bool) error {
+	_, err := s.P.Exec(ctx,
+		`UPDATE mcp_servers SET status=$2, healthy=$3, last_health_at=now(), updated_at=now() WHERE id=$1`,
+		id, status, healthy)
+	return err
+}
+
+// ListComments 返回某工具最近的评分评论。
+func (s *Store) ListComments(ctx context.Context, toolID int64, limit int) ([]model.ToolComment, error) {
+	rows, err := s.P.Query(ctx,
+		`SELECT r.rating, r.comment, COALESCE(u.username,'匿名')
+		 FROM tool_ratings r LEFT JOIN users u ON u.id=r.user_id
+		 WHERE r.tool_id=$1 AND r.comment <> ''
+		 ORDER BY r.created_at DESC LIMIT $2`, toolID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.ToolComment
+	for rows.Next() {
+		var c model.ToolComment
+		if err := rows.Scan(&c.Rating, &c.Comment, &c.Username); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// SensitiveHotTools 检测最近 N 分钟内敏感工具的高频调用。
+func (s *Store) SensitiveHotTools(ctx context.Context, threshold int, spanMinutes int) ([]model.SensitiveHot, error) {
+	rows, err := s.P.Query(ctx,
+		`SELECT t.id, t.name, COUNT(*) AS calls
+		 FROM tool_calls c JOIN mcp_tools t ON t.id=c.tool_id
+		 WHERE t.sensitive = true AND c.created_at >= now() - make_interval(mins => $1)
+		 GROUP BY t.id, t.name HAVING COUNT(*) >= $2
+		 ORDER BY calls DESC`, spanMinutes, threshold)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.SensitiveHot
+	for rows.Next() {
+		var h model.SensitiveHot
+		if err := rows.Scan(&h.ToolID, &h.Name, &h.Calls); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, nil
+}
+
+func (s *Store) InsertAuditAlert(ctx context.Context, a *model.AuditAlert) error {
+	_, err := s.P.Exec(ctx,
+		`INSERT INTO audit_alerts(severity,rule,tool_id,detail) VALUES($1,$2,$3,$4)`,
+		a.Severity, a.Rule, a.ToolID, a.Detail)
+	return err
+}
+
+func (s *Store) ListAuditAlerts(ctx context.Context, limit int) ([]model.AuditAlert, error) {
+	rows, err := s.P.Query(ctx,
+		`SELECT id,severity,rule,COALESCE(tool_id,0),detail,created_at
+		 FROM audit_alerts ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.AuditAlert
+	for rows.Next() {
+		var a model.AuditAlert
+		if err := rows.Scan(&a.ID, &a.Severity, &a.Rule, &a.ToolID, &a.Detail, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// GovernanceReport 治理周报摘要。
+func (s *Store) GovernanceReport(ctx context.Context) (map[string]any, error) {
+	var servers, tools, sensitive, calls, cost, alerts int64
+	err := s.P.QueryRow(ctx, `
+		SELECT (SELECT COUNT(*) FROM mcp_servers),
+		       (SELECT COUNT(*) FROM mcp_tools),
+		       (SELECT COUNT(*) FROM mcp_tools WHERE sensitive),
+		       (SELECT COUNT(*) FROM tool_calls),
+		       (SELECT COALESCE(SUM(cost_micros),0)::bigint FROM tool_calls),
+		       (SELECT COUNT(*) FROM audit_alerts WHERE created_at >= now() - interval '7 days')
+	`).Scan(&servers, &tools, &sensitive, &calls, &cost, &alerts)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"servers": servers, "tools": tools, "sensitive_tools": sensitive,
+		"calls": calls, "cost_micros": cost, "alerts_7d": alerts,
+	}, nil
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }

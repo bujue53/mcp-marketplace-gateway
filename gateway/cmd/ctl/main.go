@@ -72,6 +72,8 @@ func runServe(cfg *config.Config) {
 	rl := middleware.NewRateLimiter(rdb, cfg.RateLimitRPS, cfg.RateLimitBurst)
 	mw := middleware.New(cfg, st, rl, cb)
 	srv := api.New(cfg, st, reg, gw, mw)
+	defer srv.CloseSink()
+	reg.StartHealthLoop(ctx, 30*time.Second)
 
 	log.Printf("gateway listening on %s", cfg.HTTPAddr)
 	if err := srv.Router().Run(cfg.HTTPAddr); err != nil {
@@ -175,14 +177,31 @@ func seedMarket(ctx context.Context, cfg *config.Config, st *store.Store) error 
 		EndpointURL: cfg.MockMCPURL, Transport: "streamable_http", AuthType: "none",
 		Status: "online", OwnerID: admin.ID, Tags: []string{"demo", "mcp"},
 	}
-	if err := reg.RegisterServer(ctx, mock); err != nil {
-		log.Printf("register mock-mcp: %v", err)
-	} else if n, err := reg.SyncNativeServer(ctx, mock.ID); err != nil {
-		log.Printf("sync mock-mcp tools: %v", err)
-	} else {
-		log.Printf("synced %d native tools from %s", n, mock.Name)
-	}
+	registerNative(ctx, reg, mock)
+
+	registerNative(ctx, reg, &model.MCPServer{
+		Name: "mock-file-server", Description: "原生 MCP 示例服务：文件工具", Version: "1.0.0",
+		EndpointURL: cfg.MockFileURL, Transport: "streamable_http", AuthType: "none",
+		Status: "online", OwnerID: admin.ID, Tags: []string{"demo", "file"},
+	})
+	registerNative(ctx, reg, &model.MCPServer{
+		Name: "mock-db-server", Description: "原生 MCP 示例服务：数据库工具", Version: "1.0.0",
+		EndpointURL: cfg.MockDBURL, Transport: "streamable_http", AuthType: "none",
+		Status: "online", OwnerID: admin.ID, Tags: []string{"demo", "database"},
+	})
 	return nil
+}
+
+func registerNative(ctx context.Context, reg *registry.Service, sv *model.MCPServer) {
+	if err := reg.RegisterServer(ctx, sv); err != nil {
+		log.Printf("register %s: %v", sv.Name, err)
+		return
+	}
+	if n, err := reg.SyncNativeServer(ctx, sv.ID); err != nil {
+		log.Printf("sync %s tools: %v", sv.Name, err)
+	} else {
+		log.Printf("synced %d native tools from %s", n, sv.Name)
+	}
 }
 
 func fetchSpec(ctx context.Context, cfg *config.Config) ([]byte, error) {
@@ -210,4 +229,3 @@ func fetchSpec(ctx context.Context, cfg *config.Config) ([]byte, error) {
 	}
 	return nil, lastErr
 }
-

@@ -38,6 +38,8 @@ type Config struct {
 
 	LegacyAPIURL string
 	MockMCPURL   string
+	MockFileURL  string
+	MockDBURL    string
 	OpenAPISpecURL string
 	SeedOnStartup  bool
 }
@@ -72,6 +74,8 @@ func FromEnv() (*Config, error) {
 
 	cfg.LegacyAPIURL = envStr("LEGACY_API_URL", "http://localhost:9002")
 	cfg.MockMCPURL = envStr("MOCK_MCP_URL", "http://localhost:9003")
+	cfg.MockFileURL = envStr("MOCK_FILE_URL", "http://localhost:9004")
+	cfg.MockDBURL = envStr("MOCK_DB_URL", "http://localhost:9005")
 	cfg.OpenAPISpecURL = envStr("OPENAPI_SPEC_URL", "")
 	cfg.SeedOnStartup = envBool("SEED_ON_STARTUP", false)
 

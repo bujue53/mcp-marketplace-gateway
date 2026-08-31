@@ -1,4 +1,4 @@
-.PHONY: help up down build logs ps dev-gateway dev-web seed test clean
+.PHONY: help up down build logs ps dev-gateway dev-web seed test loadtest clean
 
 help: ## 显示帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -30,6 +30,8 @@ dev-web: ## 本地运行前端
 test: ## 运行 Go 测试
 	cd gateway && go test ./...
 
+loadtest: ## 网关压测（默认 50 RPS × 5s）
+	python tools/loadtest.py --rps 50 --seconds 5
+
 clean: ## 清理构建产物
 	rm -rf gateway/bin web/dist
-

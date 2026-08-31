@@ -51,20 +51,21 @@ func (s *Server) InvokeTool(c *gin.Context) {
 		ToolID:    tool.ID,
 		TokensIn:  gateway.EstimateTokens(req.Arguments),
 		TokensOut: 0,
+		ArgumentSummary: summarizeArgs(req.Arguments),
 	}
 	result, err := s.gw.Invoke(c.Request.Context(), tool, req.Arguments)
 	call.LatencyMs = time.Since(start).Milliseconds()
 	call.StatusCode = 200
 	if err != nil {
 		call.StatusCode = 500
-		_ = s.st.InsertToolCall(c.Request.Context(), call)
+		s.sink.Submit(call)
 		metrics.ObserveToolCall(gateway.Slug(tool), 500)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 	call.TokensOut = estimateOut(result)
 	call.CostMicros = computeCost(call.TokensIn+call.TokensOut, 0.002)
-	_ = s.st.InsertToolCall(c.Request.Context(), call)
+	s.sink.Submit(call)
 	metrics.ObserveToolCall(gateway.Slug(tool), 200)
 	c.JSON(http.StatusOK, gin.H{
 		"trace_id":    call.TraceID,
@@ -111,22 +112,23 @@ func (h *mcpHandler) CallTool(ctx context.Context, name string, args []byte) (*m
 	}
 	start := time.Now()
 	call := &model.ToolCall{
-		TraceID:  middleware.TraceFrom(ctx),
-		UserID:   u.ID,
-		ToolID:   tool.ID,
-		TokensIn: gateway.EstimateTokens(args),
+		TraceID:         middleware.TraceFrom(ctx),
+		UserID:          u.ID,
+		ToolID:          tool.ID,
+		TokensIn:        gateway.EstimateTokens(args),
+		ArgumentSummary: summarizeArgs(args),
 	}
 	result, err := h.s.gw.Invoke(ctx, tool, args)
 	call.LatencyMs = time.Since(start).Milliseconds()
 	call.StatusCode = 200
 	if err != nil {
 		call.StatusCode = 500
-		_ = h.s.st.InsertToolCall(ctx, call)
+		h.s.sink.Submit(call)
 		return &mcp.CallToolResult{Content: []mcp.ContentBlock{{Type: "text", Text: err.Error()}}, IsError: true}, nil
 	}
 	call.TokensOut = estimateOut(result)
 	call.CostMicros = computeCost(call.TokensIn+call.TokensOut, 0.002)
-	_ = h.s.st.InsertToolCall(ctx, call)
+	h.s.sink.Submit(call)
 	return result, nil
 }
 
@@ -201,3 +203,11 @@ func toRaw(m model.JSON) json.RawMessage {
 	return b
 }
 
+// summarizeArgs 把调用参数截断为可读的摘要，用于审计展示。
+func summarizeArgs(raw json.RawMessage) string {
+	s := string(raw)
+	if len(s) > 256 {
+		return s[:256]
+	}
+	return s
+}

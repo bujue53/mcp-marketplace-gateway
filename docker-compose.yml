@@ -65,6 +65,24 @@ services:
     ports:
       - "9003:9003"
 
+  mock-file:
+    build:
+      context: ./servers/mock-file
+    container_name: mcp-mock-file
+    environment:
+      HTTP_PORT: 9004
+    ports:
+      - "9004:9004"
+
+  mock-db:
+    build:
+      context: ./servers/mock-db
+    container_name: mcp-mock-db
+    environment:
+      HTTP_PORT: 9005
+    ports:
+      - "9005:9005"
+
   gateway:
     build:
       context: ./gateway
@@ -76,6 +94,8 @@ services:
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       LEGACY_API_URL: ${LEGACY_API_URL:-http://legacy-api:9002}
       MOCK_MCP_URL: ${MOCK_MCP_URL:-http://mock-mcp:9003}
+      MOCK_FILE_URL: ${MOCK_FILE_URL:-http://mock-file:9004}
+      MOCK_DB_URL: ${MOCK_DB_URL:-http://mock-db:9005}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-jaeger:4318}
       SEED_ON_STARTUP: ${SEED_ON_STARTUP:-true}
       OPENAPI_SPEC_URL: ${OPENAPI_SPEC_URL:-}
@@ -89,6 +109,10 @@ services:
       legacy-api:
         condition: service_started
       mock-mcp:
+        condition: service_started
+      mock-file:
+        condition: service_started
+      mock-db:
         condition: service_started
     ports:
       - "8080:8080"
