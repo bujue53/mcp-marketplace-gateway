@@ -3,7 +3,7 @@ package auth
 import (
 	"context"
 
-	"github.com/yafeng/mcp-marketplace/gateway/internal/model"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/model"
 )
 
 type ctxKey string

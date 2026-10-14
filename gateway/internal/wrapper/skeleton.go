@@ -1,84 +1,123 @@
 package wrapper
 
 import (
+	"embed"
+	"encoding/json"
 	"fmt"
+	"go/format"
+	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/mcp"
 )
 
-// Skeleton 依据 OpenAPI 文档生成 MCP Server 骨架代码（Go 或 TypeScript）。
-// 生成的骨架可自行编译/补齐工具转发逻辑，交付「自动生成 MCP Server」素材。
+//go:embed templates/*.tmpl
+var skeletonTemplates embed.FS
+
+//go:embed openapi_request.go
+var requestHelpers string
+
+type SkeletonProject struct {
+	Lang  string            `json:"lang"`
+	Code  string            `json:"code"`
+	Files map[string]string `json:"files"`
+	Run   []string          `json:"run"`
+}
+
+type skeletonBinding struct {
+	Tool mcp.Tool `json:"tool"`
+	RequestBinding
+}
+
+// Skeleton 保留单文件源码接口；API 同时提供独立项目文件与运行命令。
 func Skeleton(doc *OpenAPI, lang string) (string, error) {
-	tools := NewGenerator("").Build(doc)
-	switch strings.ToLower(lang) {
-	case "go", "golang":
-		return skeletonGo(doc, tools), nil
+	project, err := GenerateSkeletonProject(doc, lang, "")
+	if err != nil {
+		return "", err
+	}
+	return project.Code, nil
+}
+
+func GenerateSkeletonProject(doc *OpenAPI, lang, baseURL string) (*SkeletonProject, error) {
+	if doc == nil {
+		return nil, fmt.Errorf("openapi document is required")
+	}
+	lang = strings.ToLower(strings.TrimSpace(lang))
+	switch lang {
+	case "", "go", "golang":
+		lang = "go"
 	case "ts", "typescript":
-		return skeletonTS(doc, tools), nil
+		lang = "ts"
 	default:
-		ids := []string{}
-		for _, t := range tools {
-			ids = append(ids, t.Tool.Name)
+		return nil, fmt.Errorf("unsupported language %q", lang)
+	}
+	tools, err := NewGenerator(baseURL).Build(doc)
+	if err != nil {
+		return nil, err
+	}
+	override := baseURL
+	if baseURL == "" && len(tools) > 0 {
+		baseURL = tools[0].BaseURL
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Tool.Name < tools[j].Tool.Name })
+	bindings := make([]skeletonBinding, 0, len(tools))
+	for i, tool := range tools {
+		if i > 0 && tools[i-1].Tool.Name == tool.Tool.Name {
+			return nil, fmt.Errorf("duplicate tool name %q; use unique operationId values", tool.Tool.Name)
 		}
-		return "", fmt.Errorf("unsupported language %q; tools: %v", lang, ids)
+		bindings = append(bindings, skeletonBinding{Tool: tool.Tool, RequestBinding: tool.RequestBinding})
 	}
-}
-
-func skeletonGo(doc *OpenAPI, tools []GeneratedTool) string {
-	name := sanitizeName(doc.Info.Title)
+	name, version := doc.Info.Title, doc.Info.Version
 	if name == "" {
-		name = "generatedMCP"
+		name = "generated-mcp"
 	}
-	var b strings.Builder
-	b.WriteString(`// 由 OpenAPI→MCP 自动生成器生成的 MCP Server 骨架（Go）
-// 编译: go mod init ` + name + ` && go run main.go
-package main
-
-import (
-	"fmt"
-	"net/http"
-)
-
-func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/mcp", handleMCP)
-	fmt.Println("mcp server listening on :8080")
-	_ = http.ListenAndServe(":8080", mux)
-}
-
-func handleMCP(w http.ResponseWriter, r *http.Request) {
-	// 骨架：此处实现 MCP initialize / tools/list / tools/call 分发。
-	// tools:
-`)
-	for _, t := range tools {
-		b.WriteString(fmt.Sprintf("\t//   - %s\n", t.Tool.Name))
+	if version == "" {
+		version = "1.0.0"
 	}
-	b.WriteString(`}
-`)
-	return b.String()
-}
-
-func skeletonTS(doc *OpenAPI, tools []GeneratedTool) string {
-	name := sanitizeName(doc.Info.Title)
-	if name == "" {
-		name = "generatedMCP"
+	metadata, err := json.Marshal(struct {
+		Name            string            `json:"name"`
+		Version         string            `json:"version"`
+		BaseURL         string            `json:"baseURL"`
+		OverrideBaseURL string            `json:"overrideBaseURL"`
+		Bindings        []skeletonBinding `json:"bindings"`
+	}{name, version, baseURL, override, bindings})
+	if err != nil {
+		return nil, err
 	}
-	var b strings.Builder
-	b.WriteString("// 由 OpenAPI→MCP 自动生成器生成的 MCP Server 骨架（TypeScript）\n")
-	b.WriteString("// 运行: npm i @modelcontextprotocol/sdk && npx tsx index.ts\n")
-	b.WriteString("import { Server } from '@modelcontextprotocol/sdk/server/index.js';\nimport { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';\n\n")
-	b.WriteString(fmt.Sprintf("const server = new Server({ name: '%s', version: '%s' }, { capabilities: { tools: {} } });\n\n", name, doc.Info.Version))
-	b.WriteString("server.setRequestHandler(ListToolsRequestSchema, async () => {\n  return { tools: [\n")
-	for _, t := range tools {
-		b.WriteString(fmt.Sprintf("    { name: %q, description: %q, inputSchema: %s },\n",
-			t.Tool.Name, t.Tool.Description, string(t.Tool.InputSchema)))
+	template, err := skeletonTemplates.ReadFile("templates/server." + lang + ".tmpl")
+	if err != nil {
+		return nil, err
 	}
-	b.WriteString("  ] };\n});\n\n")
-	b.WriteString(`server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  // 根据 req.params.name 分发到对应实现。
-  return { content: [{ type: 'text', text: '骨架占位响应' }] };
-});
-
-await server.connect(new StdioServerTransport());
-`)
-	return b.String()
+	var literal string
+	if lang == "go" {
+		literal = strconv.Quote(string(metadata))
+	} else {
+		quoted, _ := json.Marshal(string(metadata))
+		literal = string(quoted)
+	}
+	code := strings.Replace(string(template), "__METADATA__", literal, 1)
+	_, helpers, found := strings.Cut(strings.ReplaceAll(requestHelpers, "\r\n", "\n"), "// request helpers begin\n")
+	if !found {
+		return nil, fmt.Errorf("generated request helpers marker is missing")
+	}
+	code = strings.Replace(code, "__REQUEST_HELPERS__", helpers, 1)
+	project := &SkeletonProject{Lang: lang, Files: map[string]string{}}
+	if lang == "go" {
+		formatted, err := format.Source([]byte(code))
+		if err != nil {
+			return nil, fmt.Errorf("format generated Go: %w", err)
+		}
+		code = string(formatted)
+		project.Files["main.go"] = code
+		project.Files["go.mod"] = "module generated-mcp\n\ngo 1.22\n"
+		project.Run = []string{"go build -o mcp-server .", "go run ."}
+	} else {
+		project.Files["server.ts"] = code
+		project.Files["package.json"] = `{"name":"generated-mcp","version":"1.0.0","private":true,"type":"module","scripts":{"build":"tsc -p tsconfig.json","start":"node dist/server.js"},"devDependencies":{"typescript":"5.6.3","@types/node":"22.7.4"}}` + "\n"
+		project.Files["tsconfig.json"] = `{"compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext","strict":true,"outDir":"dist","lib":["ES2022","DOM"],"skipLibCheck":true},"include":["server.ts"]}` + "\n"
+		project.Run = []string{"npm install", "npm run build", "npm start"}
+	}
+	project.Code = code
+	return project, nil
 }

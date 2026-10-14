@@ -2,12 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/auth"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/model"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/store"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/auth"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/model"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/store"
 )
 
 // CreateServer 注册一个 MCP Server。
@@ -23,7 +24,7 @@ func (s *Server) CreateServer(c *gin.Context) {
 		return
 	}
 	in.OwnerID = u.ID
-	if err := s.reg.RegisterServer(c.Request.Context(), &in); err != nil {
+	if _, err := s.reg.RegisterServer(c.Request.Context(), &in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -38,6 +39,28 @@ func (s *Server) ListServers(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"items": list})
+}
+
+// ServerStatusEvents streams online/offline transitions to authenticated clients.
+func (s *Server) ServerStatusEvents(c *gin.Context) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	events, unsubscribe := s.reg.SubscribeStatusChanges()
+	defer unsubscribe()
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				return false
+			}
+			c.SSEvent("server.status", event)
+			return true
+		case <-c.Request.Context().Done():
+			return false
+		}
+	})
 }
 
 func (s *Server) GetServer(c *gin.Context) {
@@ -80,7 +103,7 @@ func (s *Server) GenerateFromOpenAPI(c *gin.Context) {
 	}
 	var req generateReq
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Spec) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "spec and base_url are required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "spec is required"})
 		return
 	}
 	if req.BaseURL == "" {

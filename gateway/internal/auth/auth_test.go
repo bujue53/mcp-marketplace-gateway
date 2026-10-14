@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yafeng/mcp-marketplace/gateway/internal/model"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/model"
 )
 
 func TestDefaultRoleAllows(t *testing.T) {

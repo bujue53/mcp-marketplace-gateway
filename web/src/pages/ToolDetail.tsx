@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api/client';
-import type { MCPTool } from '../api/types';
+import type { MCPTool, ToolVersion } from '../api/types';
 import { StarRating } from '../components/StarRating';
 import { useAuth } from '../context/AuthContext';
 
@@ -18,6 +18,7 @@ export function ToolDetail() {
   const [comment, setComment] = useState('');
   const [config, setConfig] = useState('');
   const [comments, setComments] = useState<{ rating: number; comment: string; username: string }[]>([]);
+  const [versions, setVersions] = useState<ToolVersion[]>([]);
 
   useEffect(() => {
     api
@@ -25,12 +26,13 @@ export function ToolDetail() {
       .then(setTool)
       .catch((e) => setError((e as Error).message));
     api.toolComments(Number(id)).then((r) => setComments(r.items)).catch(() => setComments([]));
+    api.toolVersions(Number(id)).then((r) => setVersions(r.items)).catch(() => setVersions([]));
   }, [id]);
 
   const rate = async (rating: number) => {
     if (!token || !tool) return;
     try {
-      await api.rateTool(tool.id, rating, token);
+      await api.rateTool(tool.id, rating, comment, token);
       setNotice(`已评 ${rating} 星${comment ? '，感谢评论' : ''}`);
       const updated = await api.getTool(tool.id);
       setTool(updated);
@@ -119,6 +121,31 @@ export function ToolDetail() {
             </div>
           </div>
         )}
+
+        <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-200">版本快照</h3>
+            <span className="text-xs text-slate-500">最近 {versions.length} 条</span>
+          </div>
+          {versions.length === 0 ? (
+            <p className="mt-2 text-xs text-slate-500">暂无版本快照</p>
+          ) : (
+            <div className="mt-3 space-y-2">
+              {versions.map((version, index) => (
+                <details key={version.id} className="rounded-lg bg-slate-950 px-3 py-2">
+                  <summary className="cursor-pointer text-xs text-slate-300">
+                    <span className="font-medium">v{version.version}</span>
+                    {index === 0 && <span className="ml-2 text-brand-400">最近快照</span>}
+                    <span className="ml-2 text-slate-500">{new Date(version.created_at).toLocaleString()}</span>
+                  </summary>
+                  <pre className="mt-2 max-h-48 overflow-auto rounded bg-slate-900 p-2 text-[11px] text-slate-400">
+                    {JSON.stringify(version.spec, null, 2)}
+                  </pre>
+                </details>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900 p-4">
           <h3 className="text-sm font-semibold text-slate-200">接入配置</h3>

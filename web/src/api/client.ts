@@ -1,4 +1,4 @@
-import type { AuthResponse, MCPTool, ToolCallResult, User } from './types';
+import type { AuthResponse, MCPTool, ToolCallResult, ToolVersion, User } from './types';
 
 const BASE = __API_BASE__;
 
@@ -22,15 +22,20 @@ export const api = {
     return request<AuthResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
   },
 
-  listTools(q = '', category = '', limit = 50) {
+  listTools(q = '', category = '', limit = 50, sort = 'popular') {
     const params = new URLSearchParams({ limit: String(limit) });
     if (q) params.set('q', q);
     if (category) params.set('category', category);
+    if (sort) params.set('sort', sort);
     return request<{ items: MCPTool[] }>(`/api/marketplace/tools?${params.toString()}`);
   },
 
   getTool(id: number) {
     return request<MCPTool>(`/api/tools/${id}`);
+  },
+
+  toolVersions(id: number, limit = 20) {
+    return request<{ items: ToolVersion[] }>(`/api/tools/${id}/versions?limit=${limit}`);
   },
 
   rateTool(id: number, rating: number, comment: string, token: string) {
@@ -42,17 +47,17 @@ export const api = {
   },
 
   connectTool(id: number, token: string) {
-    return request<{ connected: boolean; endpoint: string; access: string; config: Record<string, unknown> }>(
+    return request<{ connected: boolean; tool: string; endpoint: string; access: string; config: Record<string, unknown> }>(
       `/api/tools/${id}/connect`,
       { method: 'POST' },
       token,
     );
   },
 
-  invoke(token: string, toolName: string, arguments: Record<string, unknown>) {
+  invoke(token: string, toolName: string, args: Record<string, unknown>) {
     return request<{ trace_id: string; tool: string; cost_micros: number; latency_ms: number; result: ToolCallResult }>(
       '/api/gateway/invoke',
-      { method: 'POST', body: JSON.stringify({ tool_name: toolName, arguments }) },
+      { method: 'POST', body: JSON.stringify({ tool_name: toolName, arguments: args }) },
       token,
     );
   },

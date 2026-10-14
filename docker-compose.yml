@@ -29,6 +29,7 @@ services:
       retries: 10
 
   jaeger:
+    # OpenTelemetry 追踪服务。
     image: jaegertracing/all-in-one:1.57
     container_name: mcp-jaeger
     environment:
@@ -37,6 +38,24 @@ services:
       - "16686:16686"
       - "4318:4318"
       - "4317:4317"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: mcp-clickhouse
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-mcp_market}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-mcp}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-mcp-analytics}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - chdata:/var/lib/clickhouse
+    ports:
+      - "8123:8123"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   prometheus:
     image: prom/prometheus:v2.52.0
@@ -99,6 +118,10 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-jaeger:4318}
       SEED_ON_STARTUP: ${SEED_ON_STARTUP:-true}
       OPENAPI_SPEC_URL: ${OPENAPI_SPEC_URL:-}
+      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://clickhouse:8123}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-mcp}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-mcp-analytics}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-mcp_market}
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,6 +129,8 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
+      clickhouse:
+        condition: service_healthy
       legacy-api:
         condition: service_started
       mock-mcp:
@@ -131,3 +156,4 @@ services:
 
 volumes:
   pgdata:
+  chdata:

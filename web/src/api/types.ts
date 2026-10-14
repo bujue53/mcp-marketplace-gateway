@@ -37,6 +37,14 @@ export interface MCPTool {
   created_at?: string;
 }
 
+export interface ToolVersion {
+  id: number;
+  tool_id: number;
+  version: string;
+  spec: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface ContentBlock {
   type: string;
   text: string;

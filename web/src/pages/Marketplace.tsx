@@ -12,11 +12,11 @@ export function Marketplace() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
-  const load = async (q = '', category = '') => {
+  const load = async (q = '', category = '', sort = 'popular') => {
     setLoading(true);
     setError('');
     try {
-      const res = await api.listTools(q, category, 60);
+      const res = await api.listTools(q, category, 60, sort);
       setTools(res.items);
     } catch (err) {
       setError((err as Error).message);
@@ -49,7 +49,7 @@ export function Marketplace() {
         <p className="mt-1 text-sm text-slate-400">浏览、搜索、评分并一键接入企业 MCP 工具</p>
       </div>
 
-      <SearchBar onSearch={(q, cat) => load(q, cat)} />
+      <SearchBar onSearch={(q, cat, sort) => load(q, cat, sort)} />
 
       {notice && (
         <div className="mt-4 rounded-xl border border-brand-500/30 bg-brand-500/10 px-4 py-3 text-sm text-brand-500">

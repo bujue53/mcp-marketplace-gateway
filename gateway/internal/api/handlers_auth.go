@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/auth"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/auth"
 )
 
 type loginReq struct {

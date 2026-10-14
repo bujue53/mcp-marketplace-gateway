@@ -1,0 +1,71 @@
+{
+  "verified_at": "2026-10-14T17:35:33.922Z",
+  "skills": {
+    "passed": true,
+    "checks": [
+      "ZIP package upload",
+      "frontmatter",
+      "metadata",
+      "resource loading",
+      "invalid metadata rejected",
+      "restart recovery",
+      "internal skill health"
+    ]
+  },
+  "clickhouse": {
+    "passed": true,
+    "checks": [
+      "batch export",
+      "queries served by ClickHouse",
+      "PostgreSQL fallback",
+      "outage buffering",
+      "catch-up recovery",
+      "replay deduplication"
+    ]
+  },
+  "permissions": {
+    "passed": true,
+    "attempts": 20,
+    "rejected": 20,
+    "audited": 20,
+    "immediate_revocation": true
+  },
+  "agent": {
+    "passed": true,
+    "implementation": "MCP workflow agent",
+    "source": "real PostgreSQL",
+    "rows": 3,
+    "total": 700,
+    "saved_and_read_back": true
+  },
+  "performance": {
+    "completed": 42000,
+    "dropped": 0,
+    "elapsed_seconds": 20.004091914,
+    "failure_examples": [],
+    "gateway_overhead_ms": {
+      "p50": 0.9969,
+      "p95": 1.5057,
+      "p99": 2.0982
+    },
+    "latency_ms": {
+      "p50": 5.446689,
+      "p95": 7.857042,
+      "p99": 8.476939
+    },
+    "offered": 42000,
+    "offered_rps": 2100,
+    "passed": true,
+    "run_id": "final-1791999334069",
+    "seconds": 20,
+    "status_counts": {
+      "200": 42000
+    },
+    "success_ratio": 1,
+    "successes": 42000,
+    "successful_qps": 2099.5704369167597,
+    "workers": 128,
+    "logs_persisted": true,
+    "clickhouse_logs_match": true
+  }
+}

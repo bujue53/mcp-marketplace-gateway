@@ -10,38 +10,43 @@ import (
 
 // Config 聚合网关运行所需的全部配置，支持环境变量注入（Docker Compose / 本地）。
 type Config struct {
-	HTTPAddr string
-	GinMode  string
+	HTTPAddr       string
+	GinMode        string
+	RequestLogging bool
 
 	DatabaseURL string
 	RedisAddr   string
 	RedisPass   string
 	RedisDB     int
 
-	JWTSecret     string
-	JWTTTL        time.Duration
-	AdminUser     string
-	AdminPass     string
+	JWTSecret string
+	JWTTTL    time.Duration
+	AdminUser string
+	AdminPass string
 
 	RateLimitRPS   int
 	RateLimitBurst int
 
-	CircuitFailRatio   float64
-	CircuitMinSamples  int
-	CircuitInterval    time.Duration
-	CircuitWindow      time.Duration
+	CircuitFailRatio  float64
+	CircuitMinSamples int
+	CircuitInterval   time.Duration
+	CircuitWindow     time.Duration
 
 	CostPer1KTokens float64
 
 	OTLPEndpoint string
 	OTLPProtocol string
 
-	LegacyAPIURL string
-	MockMCPURL   string
-	MockFileURL  string
-	MockDBURL    string
-	OpenAPISpecURL string
-	SeedOnStartup  bool
+	LegacyAPIURL       string
+	MockMCPURL         string
+	MockFileURL        string
+	MockDBURL          string
+	OpenAPISpecURL     string
+	SeedOnStartup      bool
+	ClickHouseURL      string
+	ClickHouseUser     string
+	ClickHousePassword string
+	ClickHouseDatabase string
 }
 
 // FromEnv 从环境变量加载配置，未设置时应用默认值。
@@ -49,6 +54,7 @@ func FromEnv() (*Config, error) {
 	cfg := &Config{}
 	cfg.HTTPAddr = ":" + envStr("HTTP_PORT", "8080")
 	cfg.GinMode = envStr("GIN_MODE", "release")
+	cfg.RequestLogging = envBool("HTTP_REQUEST_LOG", true)
 	cfg.DatabaseURL = envStr("DATABASE_URL", "postgres://mcp:mcp-secret@localhost:5432/mcp_market?sslmode=disable")
 	cfg.RedisAddr = envStr("REDIS_ADDR", "localhost:6379")
 	cfg.RedisPass = envStr("REDIS_PASSWORD", "")
@@ -78,6 +84,10 @@ func FromEnv() (*Config, error) {
 	cfg.MockDBURL = envStr("MOCK_DB_URL", "http://localhost:9005")
 	cfg.OpenAPISpecURL = envStr("OPENAPI_SPEC_URL", "")
 	cfg.SeedOnStartup = envBool("SEED_ON_STARTUP", false)
+	cfg.ClickHouseURL = envStr("CLICKHOUSE_URL", "")
+	cfg.ClickHouseUser = envStr("CLICKHOUSE_USER", "mcp")
+	cfg.ClickHousePassword = envStr("CLICKHOUSE_PASSWORD", "")
+	cfg.ClickHouseDatabase = envStr("CLICKHOUSE_DATABASE", "mcp_market")
 
 	if len(cfg.JWTSecret) < 16 {
 		return nil, fmt.Errorf("JWT_SECRET 至少需要 16 个字符")

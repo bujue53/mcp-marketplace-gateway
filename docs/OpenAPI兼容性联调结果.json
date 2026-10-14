@@ -1,0 +1,74 @@
+{
+  "verified_at": "2026-10-14T16:29:10.904Z",
+  "generated_projects": [
+    {
+      "lang": "go",
+      "compiled": true,
+      "started": true,
+      "passed": true,
+      "checks": [
+        "initialize",
+        "tools/list",
+        "ping",
+        "notification",
+        "component/recursive references",
+        "common parameter override",
+        "path/query escaping",
+        "query arrays/deepObject",
+        "header arrays/cookie",
+        "JSON/form/text body",
+        "bearer/API key OR/AND security",
+        "HEAD/OPTIONS",
+        "traceparent forwarding",
+        "REST 503",
+        "unknown tool/method",
+        "nested required arguments",
+        "invalid JSON",
+        "GET 405",
+        "Origin 403",
+        "authentication 401"
+      ]
+    },
+    {
+      "lang": "ts",
+      "compiled": true,
+      "started": true,
+      "passed": true,
+      "checks": [
+        "initialize",
+        "tools/list",
+        "ping",
+        "notification",
+        "component/recursive references",
+        "common parameter override",
+        "path/query escaping",
+        "query arrays/deepObject",
+        "header arrays/cookie",
+        "JSON/form/text body",
+        "bearer/API key OR/AND security",
+        "HEAD/OPTIONS",
+        "traceparent forwarding",
+        "REST 503",
+        "unknown tool/method",
+        "nested required arguments",
+        "invalid JSON",
+        "GET 405",
+        "Origin 403",
+        "authentication 401"
+      ]
+    }
+  ],
+  "gateway": {
+    "passed": true,
+    "checks": [
+      "registration without base_url",
+      "response/recursive schemas persisted",
+      "REST invocation",
+      "MCP invocation",
+      "unsupported media rejected",
+      "bindings restored after gateway restart",
+      "credential summary redaction"
+    ]
+  },
+  "unsupported_language_status": 400
+}

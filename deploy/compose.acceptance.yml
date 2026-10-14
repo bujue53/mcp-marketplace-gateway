@@ -1,0 +1,27 @@
+services:
+  gateway:
+    environment:
+      # 允许单一压测用户达到目标速率，JWT/RBAC/Redis/审计/追踪依然启用。
+      RATE_LIMIT_RPS: 5000
+      RATE_LIMIT_BURST: 10000
+      HTTP_REQUEST_LOG: false
+  acceptance-backend:
+    image: mcp-marketplace-gateway:latest
+    entrypoint: ["./bin/acceptance"]
+    command: ["backend"]
+    environment:
+      DATABASE_URL: postgres://mcp:mcp-secret@postgres:5432/mcp_market?sslmode=disable
+      REPORT_DIR: /reports
+    volumes:
+      - acceptance_reports:/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+  acceptance-client:
+    image: mcp-marketplace-gateway:latest
+    entrypoint: ["./bin/acceptance"]
+    command: ["load"]
+    environment:
+      ADMIN_PASS: ${ADMIN_PASS:-admin123}
+volumes:
+  acceptance_reports:

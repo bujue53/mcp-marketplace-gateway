@@ -5,16 +5,26 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/auth"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/model"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/store"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/auth"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/model"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/store"
 )
 
 func (s *Server) MarketplaceTools(c *gin.Context) {
 	q := c.Query("q")
 	category := c.Query("category")
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	items, err := s.reg.ListTools(c.Request.Context(), q, category, limit)
+	sort := c.DefaultQuery("sort", "")
+	var items []*model.MCPTool
+	var err error
+	if sort == "popular" {
+		items, err = s.reg.ListPopularTools(c.Request.Context(), q, category, limit)
+	} else if sort == "" || sort == "default" {
+		items, err = s.reg.ListTools(c.Request.Context(), q, category, limit)
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported sort; use popular"})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -34,6 +44,37 @@ func (s *Server) GetTool(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, tool)
+}
+
+// ToolVersions 返回工具最近的版本快照。
+func (s *Server) ToolVersions(c *gin.Context) {
+	id := parseID(c.Param("id"))
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tool id"})
+		return
+	}
+	if _, err := s.reg.GetTool(c.Request.Context(), id); err == store.ErrNotFound {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if err != nil || limit < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 100"})
+		return
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	items, err := s.st.ListToolVersions(c.Request.Context(), id, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
 type rateReq struct {
@@ -72,8 +113,8 @@ func (s *Server) ConnectTool(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	// 一键接入：为该用户的角色授予 invoke 权限。
-	if err := s.st.UpsertPermission(c.Request.Context(), "role", u.Role, "tool", tool.ID, "invoke", true); err != nil {
+	// 一键接入只为当前用户授予 invoke 权限，不影响同角色的其他用户。
+	if err := s.st.UpsertPermission(c.Request.Context(), "user", strconv.FormatInt(u.ID, 10), "tool", tool.ID, "invoke", true); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

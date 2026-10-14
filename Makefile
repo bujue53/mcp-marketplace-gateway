@@ -22,7 +22,7 @@ seed: ## 重建种子数据（注册 mock 服务 + 工具 + 管理员）
 	docker compose exec gateway sh -c './bin/ctl seed'
 
 dev-gateway: ## 本地运行网关（需本地 Go + 依赖服务）
-	cd gateway && go run ./cmd/server
+	cd gateway && go run ./cmd/ctl serve
 
 dev-web: ## 本地运行前端
 	cd web && npm install && npm run dev

@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS skills_bindings (
+ server_id BIGINT PRIMARY KEY REFERENCES mcp_servers(id) ON DELETE CASCADE,
+ skills JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS analytics_checkpoint (
+ name TEXT PRIMARY KEY,
+ last_id BIGINT NOT NULL DEFAULT 0,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

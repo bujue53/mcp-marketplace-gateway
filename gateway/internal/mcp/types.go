@@ -29,6 +29,15 @@ type JSONRPCResponse struct {
 	Error   *JSONRPCError   `json:"error,omitempty"`
 }
 
+func (response JSONRPCResponse) MarshalJSON() ([]byte, error) {
+	type wireResponse JSONRPCResponse
+	response.JSONRPC = JSONRPCVersion
+	if len(response.ID) == 0 {
+		response.ID = json.RawMessage("null")
+	}
+	return json.Marshal(wireResponse(response))
+}
+
 // JSONRPCError 遵循 JSON-RPC 2.0 错误对象。
 type JSONRPCError struct {
 	Code    int            `json:"code"`
@@ -45,10 +54,10 @@ type Tool struct {
 
 // InitializeResult initialize 方法返回体。
 type InitializeResult struct {
-	ProtocolVersion string      `json:"protocolVersion"`
+	ProtocolVersion string       `json:"protocolVersion"`
 	Capabilities    Capabilities `json:"capabilities"`
-	ServerInfo      ServerInfo  `json:"serverInfo"`
-	Instructions    string      `json:"instructions,omitempty"`
+	ServerInfo      ServerInfo   `json:"serverInfo"`
+	Instructions    string       `json:"instructions,omitempty"`
 }
 
 type Capabilities struct {
@@ -91,6 +100,11 @@ type ContentBlock struct {
 type Handler interface {
 	ListTools() ([]Tool, error)
 	CallTool(ctx context.Context, name string, args []byte) (*CallToolResult, error)
+}
+
+// ContextLister allows a handler to filter discovered tools for the current caller.
+type ContextLister interface {
+	ListToolsContext(ctx context.Context) ([]Tool, error)
 }
 
 // DecodeRequest 读取并解码一个 JSON-RPC 请求。

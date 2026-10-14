@@ -1,0 +1,50 @@
+{
+  "verified_at": "2026-10-14T15:18:49.5961869+00:00",
+  "checks": [
+    {
+      "name": "REST",
+      "trace_id": "1922d78454b94c628afa063970c7d907",
+      "spans": [
+        "POST /api/gateway/invoke",
+        "HTTP GET",
+        "tool.invoke"
+      ],
+      "error_expected": false,
+      "passed": true
+    },
+    {
+      "name": "MCP",
+      "trace_id": "170b280d677c45d987a1383da5f6a201",
+      "spans": [
+        "HTTP POST",
+        "POST /mcp",
+        "tool.invoke",
+        "mcp.tools/call"
+      ],
+      "error_expected": false,
+      "passed": true
+    },
+    {
+      "name": "MCP tool error",
+      "trace_id": "12ac337d1a1f4e5c8af91ba376976e78",
+      "spans": [
+        "POST /mcp"
+      ],
+      "error_expected": true,
+      "passed": true
+    },
+    {
+      "name": "Downstream failure",
+      "trace_id": "164c2f71c8fa4afeabd223c574e96be5",
+      "spans": [
+        "HTTP GET",
+        "tool.invoke",
+        "POST /api/gateway/invoke"
+      ],
+      "error_expected": true,
+      "passed": true
+    }
+  ],
+  "call_log_rows": 3,
+  "audit_log_rows": 4
+}

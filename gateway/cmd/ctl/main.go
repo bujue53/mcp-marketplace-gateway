@@ -8,18 +8,20 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/api"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/auth"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/config"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/gateway"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/middleware"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/model"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/otel"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/registry"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/store"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/api"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/auth"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/config"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/gateway"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/middleware"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/model"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/otel"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/registry"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/store"
 )
 
 func main() {
@@ -53,31 +55,59 @@ func main() {
 }
 
 func runServe(cfg *config.Config) {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	st, rdb := connect(ctx, cfg)
+	defer st.P.Close()
+	defer rdb.Close()
+	if cfg.ClickHouseURL != "" {
+		analytics, err := store.NewAnalytics(cfg.ClickHouseURL, cfg.ClickHouseUser, cfg.ClickHousePassword, cfg.ClickHouseDatabase)
+		if err != nil {
+			log.Fatalf("analytics config: %v", err)
+		}
+		st.Analytics = analytics
+		st.StartExporter(ctx)
+		defer analytics.Close()
+	}
+	gw := gateway.NewService(st)
+	reg := registry.New(st, gw)
 
-	shutdown, _ := otel.Init(ctx, "mcp-gateway", cfg.OTLPEndpoint)
+	shutdown, traceErr := otel.Init(ctx, "mcp-gateway", cfg.OTLPEndpoint)
+	if traceErr != nil {
+		log.Printf("tracing initialization: %v", traceErr)
+	}
 	defer shutdown()
 
 	ensureUsers(ctx, st, cfg)
 	if cfg.SeedOnStartup {
-		if err := seedMarket(ctx, cfg, st); err != nil {
+		if err := seedMarket(ctx, cfg, st, gw, reg); err != nil {
 			log.Printf("seed-on-startup skipped: %v", err)
 		}
 	}
 
-	gw := gateway.NewService(st)
-	reg := registry.New(st, gw)
-	cb := middleware.NewCircuitBreaker(cfg.CircuitFailRatio, cfg.CircuitMinSamples, cfg.CircuitInterval)
+	cb := middleware.NewCircuitBreaker(cfg.CircuitFailRatio, cfg.CircuitMinSamples, cfg.CircuitInterval, cfg.CircuitWindow)
 	rl := middleware.NewRateLimiter(rdb, cfg.RateLimitRPS, cfg.RateLimitBurst)
 	mw := middleware.New(cfg, st, rl, cb)
+	defer mw.CloseAudit()
 	srv := api.New(cfg, st, reg, gw, mw)
 	defer srv.CloseSink()
 	reg.StartHealthLoop(ctx, 30*time.Second)
 
 	log.Printf("gateway listening on %s", cfg.HTTPAddr)
-	if err := srv.Router().Run(cfg.HTTPAddr); err != nil {
-		log.Fatalf("http: %v", err)
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: srv.Router(), ReadHeaderTimeout: 5 * time.Second}
+	finished := make(chan error, 1)
+	go func() { finished <- server.ListenAndServe() }()
+	select {
+	case err := <-finished:
+		if err != http.ErrServerClosed {
+			log.Printf("http: %v", err)
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("http shutdown: %v", err)
+		}
 	}
 }
 
@@ -85,7 +115,9 @@ func runSeed(cfg *config.Config) error {
 	ctx := context.Background()
 	st, _ := connect(ctx, cfg)
 	ensureUsers(ctx, st, cfg)
-	return seedMarket(ctx, cfg, st)
+	gw := gateway.NewService(st)
+	reg := registry.New(st, gw)
+	return seedMarket(ctx, cfg, st, gw, reg)
 }
 
 func runLogin(cfg *config.Config) error {
@@ -154,13 +186,11 @@ func ensureUser(ctx context.Context, st *store.Store, name, pass, role string) {
 }
 
 // seedMarket 注册 mock 服务：legacy REST API（OpenAPI 自动包装）+ 原生 MCP Server。
-func seedMarket(ctx context.Context, cfg *config.Config, st *store.Store) error {
+func seedMarket(ctx context.Context, cfg *config.Config, st *store.Store, gw *gateway.Service, reg *registry.Service) error {
 	admin, err := st.FindUserByUsername(ctx, cfg.AdminUser)
 	if err != nil {
 		return err
 	}
-	gw := gateway.NewService(st)
-	reg := registry.New(st, gw)
 
 	spec, err := fetchSpec(ctx, cfg)
 	if err != nil {
@@ -193,7 +223,7 @@ func seedMarket(ctx context.Context, cfg *config.Config, st *store.Store) error 
 }
 
 func registerNative(ctx context.Context, reg *registry.Service, sv *model.MCPServer) {
-	if err := reg.RegisterServer(ctx, sv); err != nil {
+	if _, err := reg.RegisterServer(ctx, sv); err != nil {
 		log.Printf("register %s: %v", sv.Name, err)
 		return
 	}

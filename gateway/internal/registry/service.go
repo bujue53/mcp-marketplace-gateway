@@ -9,21 +9,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yafeng/mcp-marketplace/gateway/internal/gateway"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/mcp"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/model"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/store"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/wrapper"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/gateway"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/mcp"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/model"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/store"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/wrapper"
 )
 
 // Service 注册中心：MCP Server 注册 / 发现 / 版本 / 工具同步 / OpenAPI 自动包装。
 type Service struct {
-	st *store.Store
-	gw *gateway.Service
+	st       *store.Store
+	gw       *gateway.Service
+	statuses *StatusBroadcaster
 }
 
 func New(st *store.Store, gw *gateway.Service) *Service {
-	return &Service{st: st, gw: gw}
+	return &Service{st: st, gw: gw, statuses: NewStatusBroadcaster()}
+}
+
+// SubscribeStatusChanges subscribes to online/offline transitions.
+func (s *Service) SubscribeStatusChanges() (<-chan ServerStatusEvent, func()) {
+	return s.statuses.Subscribe()
 }
 
 // RegisterServer 注册一个 MCP Server。
@@ -55,7 +61,9 @@ func (s *Service) CheckHealth(ctx context.Context, serverID int64) (bool, error)
 	if !healthy {
 		status = "offline"
 	}
-	_ = s.st.UpdateServerHealth(ctx, serverID, status, healthy)
+	if err := s.updateHealth(ctx, sv, status, healthy); err != nil {
+		return false, err
+	}
 	return healthy, nil
 }
 
@@ -79,14 +87,35 @@ func (s *Service) StartHealthLoop(ctx context.Context, interval time.Duration) {
 					if !healthy {
 						status = "offline"
 					}
-					_ = s.st.UpdateServerHealth(ctx, sv.ID, status, healthy)
+					_ = s.updateHealth(ctx, sv, status, healthy)
 				}
 			}
 		}
 	}()
 }
 
+func (s *Service) updateHealth(ctx context.Context, sv *model.MCPServer, status string, healthy bool) error {
+	previous, err := s.st.UpdateServerHealth(ctx, sv.ID, status, healthy)
+	if err != nil {
+		return err
+	}
+	if previous != status {
+		s.statuses.Publish(ServerStatusEvent{
+			ServerID:       sv.ID,
+			ServerName:     sv.Name,
+			PreviousStatus: previous,
+			Status:         status,
+			Healthy:        healthy,
+			ChangedAt:      time.Now().UTC(),
+		})
+	}
+	return nil
+}
+
 func probeServer(ctx context.Context, sv *model.MCPServer) bool {
+	if sv.Transport == "skills" {
+		return true
+	}
 	base := strings.TrimRight(sv.EndpointURL, "/")
 	client := &http.Client{Timeout: 3 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/health", nil)
@@ -112,8 +141,22 @@ func (s *Service) CreateFromOpenAPI(ctx context.Context, spec []byte, baseURL st
 		return nil, nil, err
 	}
 	gen := wrapper.NewGenerator(baseURL)
-	tools := gen.Build(doc)
+	tools, err := gen.Build(doc)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(tools) == 0 {
+		return nil, nil, fmt.Errorf("OpenAPI contains no supported operations")
+	}
+	for _, tool := range tools {
+		if tool.BaseURL == "" {
+			return nil, nil, fmt.Errorf("%s: provide base_url or an absolute OpenAPI server URL", tool.Tool.Name)
+		}
+	}
 	handle := gen.Handler(tools)
+	if baseURL == "" && len(tools) > 0 {
+		baseURL = tools[0].BaseURL
+	}
 
 	serverName := doc.Info.Title
 	if serverName == "" {
@@ -143,7 +186,7 @@ func (s *Service) CreateFromOpenAPI(ctx context.Context, spec []byte, baseURL st
 			Category:     inferCategory(t.Tool.Name),
 			Tags:         []string{"generated", "openapi"},
 			InputSchema:  jsonToModel(t.Tool.InputSchema),
-			OutputSchema: jsonToModel(genOutput(t.Tool.Name)),
+			OutputSchema: jsonToModel(t.OutputSchema),
 			CostModel:    model.JSON{"tokens_per_call": 500, "cost_per_1k": 0.002},
 			IsGenerated:  true,
 			Version:      doc.Info.Version,
@@ -152,6 +195,13 @@ func (s *Service) CreateFromOpenAPI(ctx context.Context, spec []byte, baseURL st
 			return nil, nil, err
 		}
 		registered = append(registered, *mt)
+	}
+	bindings, err := json.Marshal(tools)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.st.SaveOpenAPIBindings(ctx, sv.ID, bindings); err != nil {
+		return nil, nil, err
 	}
 	s.gw.RegisterOpenAPI(sv.ID, handle)
 	return sv, registered, nil
@@ -170,13 +220,20 @@ func (s *Service) SyncNativeServer(ctx context.Context, serverID int64) (int, er
 	}
 	count := 0
 	for _, t := range tools {
+		inputSchema := jsonToModel(t.InputSchema)
+		if inputSchema == nil {
+			inputSchema = model.JSON{"type": "object", "properties": map[string]any{}}
+		}
 		mt := &model.MCPTool{
-			ServerID:    serverID,
-			Name:        t.Name,
-			Description: t.Description,
-			Category:    inferCategory(t.Name),
-			InputSchema: jsonToModel(t.InputSchema),
-			Version:     sv.Version,
+			ServerID:     serverID,
+			Name:         t.Name,
+			Description:  t.Description,
+			Category:     inferCategory(t.Name),
+			Tags:         []string{},
+			InputSchema:  inputSchema,
+			OutputSchema: model.JSON{"type": "object"},
+			CostModel:    model.JSON{},
+			Version:      sv.Version,
 		}
 		if err := s.st.UpsertTool(ctx, mt); err != nil {
 			return count, err
@@ -188,9 +245,27 @@ func (s *Service) SyncNativeServer(ctx context.Context, serverID int64) (int, er
 
 // CreateSkillsServer 把一组 Agent Skills 适配为 MCP 工具并注册到市场。
 func (s *Service) CreateSkillsServer(ctx context.Context, skills []wrapper.SkillDef, ownerID int64) (*model.MCPServer, []model.MCPTool, error) {
+	return s.CreateSkillsServerNamed(ctx, "", skills, ownerID)
+}
+
+func (s *Service) CreateSkillsServerNamed(ctx context.Context, name string, skills []wrapper.SkillDef, ownerID int64) (*model.MCPServer, []model.MCPTool, error) {
+	if len(skills) == 0 {
+		return nil, nil, fmt.Errorf("skills are required")
+	}
+	seen := map[string]bool{}
+	for _, skill := range skills {
+		key := wrapper.SkillsToolName(skill.Name)
+		if skill.Name == "" || skill.Description == "" || seen[key] {
+			return nil, nil, fmt.Errorf("skills require unique names and nonempty descriptions")
+		}
+		seen[key] = true
+	}
+	if name == "" {
+		name = fmt.Sprintf("agent-skills-adapter-%d", ownerID)
+	}
 	adapter := wrapper.NewSkillsAdapter(skills)
 	sv := &model.MCPServer{
-		Name:        "agent-skills-adapter",
+		Name:        name,
 		Description: "由 Agent Skills 规范自动适配为 MCP 工具",
 		Version:     "1.0.0",
 		EndpointURL: "skills://internal",
@@ -211,7 +286,7 @@ func (s *Service) CreateSkillsServer(ctx context.Context, skills []wrapper.Skill
 			Description:  firstNonEmptyStr(sk.Description, "Agent Skill："+sk.Name),
 			Category:     "skills",
 			Tags:         []string{"skills", "generated"},
-			InputSchema:  model.JSON{"type": "object", "properties": map[string]any{}},
+			InputSchema:  jsonToModel(wrapper.SkillsInputSchema()),
 			OutputSchema: model.JSON{"type": "object"},
 			CostModel:    model.JSON{},
 			IsGenerated:  true,
@@ -221,6 +296,13 @@ func (s *Service) CreateSkillsServer(ctx context.Context, skills []wrapper.Skill
 			return nil, nil, err
 		}
 		registered = append(registered, *mt)
+	}
+	raw, err := json.Marshal(skills)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.st.SaveSkillsBindings(ctx, sv.ID, raw); err != nil {
+		return nil, nil, err
 	}
 	s.gw.RegisterSkills(sv.ID, adapter)
 	return sv, registered, nil
@@ -246,6 +328,14 @@ func (s *Service) ListTools(ctx context.Context, q, category string, limit int) 
 		limit = 50
 	}
 	return s.st.ListTools(ctx, q, category, limit)
+}
+
+// ListPopularTools 返回按调用量排序的市场工具。
+func (s *Service) ListPopularTools(ctx context.Context, q, category string, limit int) ([]*model.MCPTool, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	return s.st.ListToolsByCalls(ctx, q, category, limit)
 }
 
 // GetTool 工具详情。
@@ -278,8 +368,4 @@ func jsonToModel(raw json.RawMessage) model.JSON {
 	var m model.JSON
 	_ = json.Unmarshal(raw, &m)
 	return m
-}
-
-func genOutput(name string) json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"result":{"type":"string"}}}`)
 }

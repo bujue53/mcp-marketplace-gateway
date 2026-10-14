@@ -19,8 +19,8 @@ gateway/bin/
 
 # env
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # logs
 *.log

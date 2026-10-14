@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/model"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/model"
 )
 
 // ErrNotFound 表示查询无结果。
@@ -15,7 +15,11 @@ var ErrNotFound = errors.New("not found")
 
 // Store 是聚合的数据访问层，集中所有 SQL。
 type Store struct {
-	P *pgxpool.Pool
+	P         *pgxpool.Pool
+	Analytics *Analytics
+	users     invocationCache[model.User]
+	tools     invocationCache[model.MCPTool]
+	servers   invocationCache[model.MCPServer]
 }
 
 func New(p *pgxpool.Pool) *Store { return &Store{P: p} }
@@ -57,6 +61,7 @@ func (s *Store) FindUserByID(ctx context.Context, id int64) (*model.User, error)
 // ---- mcp servers ----
 
 func (s *Store) UpsertServer(ctx context.Context, sv *model.MCPServer) error {
+	defer s.servers.clear()
 	return s.P.QueryRow(ctx,
 		`INSERT INTO mcp_servers(name,description,version,endpoint_url,transport,auth_type,status,owner_id,tags)
 		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
@@ -113,12 +118,15 @@ func (s *Store) ListServers(ctx context.Context, status string) ([]*model.MCPSer
 }
 
 func (s *Store) DeleteServer(ctx context.Context, id int64) error {
+	defer s.servers.clear()
+	defer s.tools.clear()
 	return s.P.QueryRow(ctx, `DELETE FROM mcp_servers WHERE id=$1 RETURNING id`, id).Scan(new(int64))
 }
 
 // ---- tools ----
 
 func (s *Store) UpsertTool(ctx context.Context, t *model.MCPTool) error {
+	defer s.tools.clear()
 	err := s.P.QueryRow(ctx,
 		`INSERT INTO mcp_tools(server_id,name,description,category,tags,input_schema,output_schema,cost_model,is_generated,sensitive,version)
 		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -152,6 +160,28 @@ func (s *Store) GetToolByID(ctx context.Context, id int64) (*model.MCPTool, erro
 		 WHERE t.id=$1 GROUP BY t.id`, id)
 }
 
+// ListToolVersions 返回工具最近的版本快照。
+func (s *Store) ListToolVersions(ctx context.Context, toolID int64, limit int) ([]model.ToolVersion, error) {
+	rows, err := s.P.Query(ctx,
+		`SELECT id,tool_id,version,spec,created_at
+		 FROM tool_versions WHERE tool_id=$1
+		 ORDER BY created_at DESC,id DESC LIMIT $2`, toolID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	versions := make([]model.ToolVersion, 0)
+	for rows.Next() {
+		var version model.ToolVersion
+		if err := rows.Scan(&version.ID, &version.ToolID, &version.Version, &version.Spec, &version.CreatedAt); err != nil {
+			return nil, err
+		}
+		versions = append(versions, version)
+	}
+	return versions, rows.Err()
+}
+
 func (s *Store) GetToolByName(ctx context.Context, serverID int64, name string) (*model.MCPTool, error) {
 	return s.queryTool(ctx,
 		`SELECT t.id,t.server_id,t.name,t.description,t.category,t.tags,
@@ -175,6 +205,15 @@ func (s *Store) FindToolByName(ctx context.Context, name string) (*model.MCPTool
 }
 
 func (s *Store) ListTools(ctx context.Context, q, category string, limit int) ([]*model.MCPTool, error) {
+	return s.listTools(ctx, q, category, limit, false)
+}
+
+// ListToolsByCalls 用调用次数为工具市场排序。
+func (s *Store) ListToolsByCalls(ctx context.Context, q, category string, limit int) ([]*model.MCPTool, error) {
+	return s.listTools(ctx, q, category, limit, true)
+}
+
+func (s *Store) listTools(ctx context.Context, q, category string, limit int, popular bool) ([]*model.MCPTool, error) {
 	sql := `SELECT t.id,t.server_id,t.name,t.description,t.category,t.tags,
 	               t.input_schema,t.output_schema,t.cost_model,t.is_generated,t.sensitive,t.version,t.created_at,
 	               COALESCE(AVG(r.rating),0)::float8, COUNT(DISTINCT r.id),
@@ -194,7 +233,11 @@ func (s *Store) ListTools(ctx context.Context, q, category string, limit int) ([
 	if len(where) > 0 {
 		sql += ` WHERE ` + joinAnd(where)
 	}
-	sql += ` GROUP BY t.id ORDER BY t.id LIMIT $` + itoa(len(args)+1)
+	orderBy := `t.id`
+	if popular {
+		orderBy = `(SELECT COUNT(*) FROM tool_calls c WHERE c.tool_id=t.id) DESC, t.id`
+	}
+	sql += ` GROUP BY t.id ORDER BY ` + orderBy + ` LIMIT $` + itoa(len(args)+1)
 	args = append(args, limit)
 
 	rows, err := s.P.Query(ctx, sql, args...)
@@ -357,11 +400,19 @@ func (s *Store) PermissionAllowed(ctx context.Context, subjectType, subjectID st
 
 // ---- health & alerts & comments ----
 
-func (s *Store) UpdateServerHealth(ctx context.Context, id int64, status string, healthy bool) error {
-	_, err := s.P.Exec(ctx,
-		`UPDATE mcp_servers SET status=$2, healthy=$3, last_health_at=now(), updated_at=now() WHERE id=$1`,
-		id, status, healthy)
-	return err
+func (s *Store) UpdateServerHealth(ctx context.Context, id int64, status string, healthy bool) (string, error) {
+	defer s.servers.clear()
+	var previous string
+	err := s.P.QueryRow(ctx,
+		`WITH previous AS (
+			 SELECT id,status FROM mcp_servers WHERE id=$1 FOR UPDATE
+		 ), updated AS (
+			 UPDATE mcp_servers SET status=$2,healthy=$3,last_health_at=now(),updated_at=now()
+			 WHERE id=$1 RETURNING id
+		 )
+		 SELECT previous.status FROM previous JOIN updated USING(id)`, id, status, healthy,
+	).Scan(&previous)
+	return previous, err
 }
 
 // ListComments 返回某工具最近的评分评论。
@@ -416,6 +467,33 @@ func (s *Store) InsertAuditAlert(ctx context.Context, a *model.AuditAlert) error
 	return err
 }
 
+// CreateSensitiveFrequencyAlert records one alert per tool and rolling window once
+// the sensitive tool reaches the configured call threshold.
+func (s *Store) CreateSensitiveFrequencyAlert(ctx context.Context, toolID int64, threshold, spanMinutes int) error {
+	_, err := s.P.Exec(ctx,
+		`WITH hot AS (
+			 SELECT t.id,t.name,COUNT(*)::bigint AS calls
+			 FROM mcp_tools t JOIN tool_calls c ON c.tool_id=t.id
+			 WHERE t.id=$1 AND t.sensitive=true
+			   AND c.created_at >= now() - make_interval(mins => $3)
+			 GROUP BY t.id,t.name
+			 HAVING COUNT(*) >= $2
+		 )
+		 INSERT INTO audit_alerts(severity,rule,tool_id,detail)
+		 SELECT 'warning',$4,hot.id,
+		        jsonb_build_object('tool_name',hot.name,'calls',hot.calls,'threshold',$2,'window_minutes',$3)
+		 FROM hot
+		 WHERE NOT EXISTS (
+			 SELECT 1 FROM audit_alerts a
+			 WHERE a.tool_id=hot.id AND a.rule=$4
+			   AND a.created_at >= now() - make_interval(mins => $3)
+		 )`,
+		toolID, threshold, spanMinutes, SensitiveFrequencyRule)
+	return err
+}
+
+const SensitiveFrequencyRule = "sensitive_tool_high_frequency"
+
 func (s *Store) ListAuditAlerts(ctx context.Context, limit int) ([]model.AuditAlert, error) {
 	rows, err := s.P.Query(ctx,
 		`SELECT id,severity,rule,COALESCE(tool_id,0),detail,created_at
@@ -442,8 +520,8 @@ func (s *Store) GovernanceReport(ctx context.Context) (map[string]any, error) {
 		SELECT (SELECT COUNT(*) FROM mcp_servers),
 		       (SELECT COUNT(*) FROM mcp_tools),
 		       (SELECT COUNT(*) FROM mcp_tools WHERE sensitive),
-		       (SELECT COUNT(*) FROM tool_calls),
-		       (SELECT COALESCE(SUM(cost_micros),0)::bigint FROM tool_calls),
+		       (SELECT COUNT(*) FROM tool_calls WHERE created_at >= now() - interval '7 days'),
+		       (SELECT COALESCE(SUM(cost_micros),0)::bigint FROM tool_calls WHERE created_at >= now() - interval '7 days'),
 		       (SELECT COUNT(*) FROM audit_alerts WHERE created_at >= now() - interval '7 days')
 	`).Scan(&servers, &tools, &sensitive, &calls, &cost, &alerts)
 	if err != nil {
@@ -452,6 +530,7 @@ func (s *Store) GovernanceReport(ctx context.Context) (map[string]any, error) {
 	return map[string]any{
 		"servers": servers, "tools": tools, "sensitive_tools": sensitive,
 		"calls": calls, "cost_micros": cost, "alerts_7d": alerts,
+		"window_days": 7,
 	}, nil
 }
 

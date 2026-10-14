@@ -1,0 +1,14 @@
+{
+  "source_and_acceptance_documents_preserved": true,
+  "remaining_containers": 0,
+  "removed_named_volumes": [
+    "mcp-marketplace_acceptance_reports",
+    "mcp-marketplace_chdata",
+    "mcp-marketplace_pgdata"
+  ],
+  "seed_on_startup": false,
+  "remaining_named_volumes": 0,
+  "scope": "PostgreSQL, ClickHouse, Redis, Jaeger, Prometheus and acceptance reports runtime data",
+  "project": "mcp-marketplace",
+  "cleared_at": "2026-10-14T17:49:38.2188601Z"
+}

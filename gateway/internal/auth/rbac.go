@@ -4,8 +4,8 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/yafeng/mcp-marketplace/gateway/internal/model"
-	"github.com/yafeng/mcp-marketplace/gateway/internal/store"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/model"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/store"
 )
 
 // rbac 实现「角色默认权限 + 细粒度权限覆盖」的授权判定。
@@ -23,16 +23,16 @@ func NewRBAC(st *store.Store) *rbac { return &rbac{st: st} }
 // subjectType = role | user；resourceType = server | tool。
 func (r *rbac) Can(ctx context.Context, user *model.User, subjectType, resourceType string, resourceID int64, action string) bool {
 	// 1) 先查细粒度覆盖（用户 / 角色维度）
-	for _, typ := range []string{subjectType, "role"} {
-		id := ""
-		if typ == "user" {
-			id = strconv.FormatInt(user.ID, 10)
-		} else {
-			id = user.Role
-		}
-		if override, found, err := r.st.PermissionAllowed(ctx, typ, id, resourceType, resourceID, action); err == nil && found {
-			return override
-		}
+	id := user.Role
+	if subjectType == "user" {
+		id = strconv.FormatInt(user.ID, 10)
+	}
+	override, found, err := r.st.EffectivePermission(ctx, subjectType, id, user.Role, resourceType, resourceID, action)
+	if err != nil {
+		return false
+	}
+	if found {
+		return override
 	}
 	// 2) 回退到角色默认策略
 	return defaultRoleAllows(user.Role, action)

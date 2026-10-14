@@ -8,6 +8,12 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	telemetry "github.com/bujue53/mcp-marketplace-gateway/gateway/internal/otel"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Client 是面向后端 MCP Server 的 Streamable HTTP 客户端，网关据此发起 tools/list / tools/call。
@@ -18,10 +24,19 @@ type Client struct {
 }
 
 func NewClient(baseURL, token string) *Client {
-	return &Client{BaseURL: baseURL, Token: token, HTTP: &http.Client{Timeout: 15 * time.Second}}
+	return &Client{BaseURL: baseURL, Token: token, HTTP: &http.Client{Timeout: 15 * time.Second, Transport: telemetry.NewTransport(nil)}}
 }
 
-func (c *Client) do(ctx context.Context, method string, params any) (*JSONRPCResponse, error) {
+func (c *Client) do(ctx context.Context, method string, params any) (response *JSONRPCResponse, callErr error) {
+	ctx, span := otel.Tracer("mcp-gateway/mcp-client").Start(ctx, "mcp."+method, trace.WithSpanKind(trace.SpanKindClient))
+	span.SetAttributes(attribute.String("rpc.system", "jsonrpc"), attribute.String("rpc.method", method))
+	defer func() {
+		if callErr != nil {
+			span.RecordError(callErr)
+			span.SetStatus(codes.Error, "MCP request failed")
+		}
+		span.End()
+	}()
 	body, _ := json.Marshal(map[string]any{
 		"jsonrpc": JSONRPCVersion,
 		"id":      1,
@@ -42,13 +57,19 @@ func (c *Client) do(ctx context.Context, method string, params any) (*JSONRPCRes
 		return nil, fmt.Errorf("call %s: %w", method, err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read %s response: %w", method, err)
+	}
 	var r JSONRPCResponse
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, fmt.Errorf("decode %s response: %w", method, err)
 	}
 	if r.Error != nil {
 		return &r, fmt.Errorf("rpc error %d: %s", r.Error.Code, r.Error.Message)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("call %s: HTTP %d", method, resp.StatusCode)
 	}
 	return &r, nil
 }
@@ -97,4 +118,3 @@ func (c *Client) CallTool(ctx context.Context, name string, args any) (*CallTool
 	}
 	return out, nil
 }
-

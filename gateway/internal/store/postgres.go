@@ -14,7 +14,7 @@ func NewPostgres(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres url: %w", err)
 	}
-	cfg.MaxConns = 10
+	cfg.MaxConns = 32
 	cfg.MinConns = 1
 	cfg.MaxConnLifetime = time.Minute
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
@@ -27,4 +27,3 @@ func NewPostgres(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	}
 	return pool, nil
 }
-

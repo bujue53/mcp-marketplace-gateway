@@ -1,0 +1,156 @@
+// OpenAPI 自动生成的独立 MCP Server。配置 REST_BASE_URL、PORT 后运行 go run .。
+package main
+
+import (
+    "bytes"
+    "context"
+    "encoding/json"
+    "fmt"
+    "io"
+    "log"
+    "net"
+    "net/http"
+    "net/url"
+    "os"
+    "sort"
+    "strings"
+    "time"
+)
+
+const metadataJSON = __METADATA__
+const protocolVersion = "2025-03-26"
+
+type tool struct {
+    Name string `json:"name"`
+    Description string `json:"description,omitempty"`
+    InputSchema json.RawMessage `json:"inputSchema"`
+}
+type binding struct {
+    Tool tool `json:"tool"`
+    RequestBinding
+}
+type specification struct {
+    Name string `json:"name"`
+    Version string `json:"version"`
+    BaseURL string `json:"baseURL"`
+    OverrideBaseURL string `json:"overrideBaseURL"`
+    Bindings []binding `json:"bindings"`
+}
+type request struct {
+    JSONRPC string `json:"jsonrpc"`
+    ID json.RawMessage `json:"id"`
+    Method string `json:"method"`
+    Params json.RawMessage `json:"params"`
+}
+type contentBlock struct {
+    Type string `json:"type"`
+    Text string `json:"text"`
+}
+type callResult struct {
+    Content []contentBlock `json:"content"`
+    IsError bool `json:"isError,omitempty"`
+}
+
+var spec specification
+var tools = map[string]binding{}
+var client = &http.Client{Timeout: 10 * time.Second}
+
+func main() {
+    if err := json.Unmarshal([]byte(metadataJSON), &spec); err != nil { log.Fatal(err) }
+    if value := os.Getenv("REST_BASE_URL"); value != "" { spec.BaseURL = value; spec.OverrideBaseURL = value }
+    base, err := url.Parse(spec.BaseURL)
+    if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") || base.RawQuery != "" || base.Fragment != "" {
+        log.Fatal("REST_BASE_URL must be an absolute HTTP(S) URL without query or fragment")
+    }
+    spec.BaseURL = strings.TrimRight(spec.BaseURL, "/")
+    for _, b := range spec.Bindings { tools[b.Tool.Name] = b }
+    host, port := os.Getenv("HOST"), os.Getenv("PORT")
+    if host == "" { host = "127.0.0.1" }
+    if port == "" { port = "8081" }
+    listener, err := net.Listen("tcp", net.JoinHostPort(host, port))
+    if err != nil { log.Fatal(err) }
+    mux := http.NewServeMux()
+    mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status":"ok"}) })
+    mux.HandleFunc("/mcp", handleMCP)
+    _, boundPort, _ := net.SplitHostPort(listener.Addr().String())
+    fmt.Println("MCP_URL=http://127.0.0.1:" + boundPort + "/mcp")
+    server := &http.Server{Handler:mux, ReadHeaderTimeout:5*time.Second, ReadTimeout:10*time.Second, WriteTimeout:15*time.Second}
+    log.Fatal(server.Serve(listener))
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(status)
+    _ = json.NewEncoder(w).Encode(value)
+}
+
+func rpcError(w http.ResponseWriter, status int, id json.RawMessage, code int, message string) {
+    writeJSON(w, status, map[string]any{"jsonrpc":"2.0", "id":id, "error":map[string]any{"code":code, "message":message}})
+}
+
+func handleMCP(w http.ResponseWriter, r *http.Request) {
+    if origin := r.Header.Get("Origin"); origin != "" {
+        parsed, err := url.Parse(origin)
+        if err != nil || parsed.Host != r.Host || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+            http.Error(w, "origin not allowed", http.StatusForbidden); return
+        }
+    }
+    if token := os.Getenv("MCP_BEARER_TOKEN"); token != "" && r.Header.Get("Authorization") != "Bearer " + token {
+        http.Error(w, "unauthenticated", http.StatusUnauthorized); return
+    }
+    if r.Method != http.MethodPost {
+        w.Header().Set("Allow", "POST")
+        http.Error(w, "use POST", http.StatusMethodNotAllowed); return
+    }
+    if strings.Split(r.Header.Get("Content-Type"), ";")[0] != "application/json" {
+        http.Error(w, "use application/json", http.StatusUnsupportedMediaType); return
+    }
+    var req request
+    decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+    if err := decoder.Decode(&req); err != nil { rpcError(w, 400, nil, -32700, "invalid JSON"); return }
+    var extra any
+    if decoder.Decode(&extra) != io.EOF { rpcError(w, 400, nil, -32700, "expected one JSON-RPC message"); return }
+    if req.JSONRPC != "2.0" || req.Method == "" { rpcError(w, 400, req.ID, -32600, "invalid request"); return }
+    if len(req.ID) == 0 { w.WriteHeader(http.StatusAccepted); return }
+    var result any
+    switch req.Method {
+    case "initialize":
+        result = map[string]any{"protocolVersion":protocolVersion, "capabilities":map[string]any{"tools":map[string]bool{"listChanged":false}}, "serverInfo":map[string]string{"name":spec.Name, "version":spec.Version}}
+    case "ping":
+        result = map[string]any{}
+    case "tools/list":
+        listed := make([]tool, 0, len(spec.Bindings))
+        for _, b := range spec.Bindings { listed = append(listed, b.Tool) }
+        result = map[string]any{"tools":listed}
+    case "tools/call":
+        var params struct { Name string `json:"name"`; Arguments map[string]any `json:"arguments"` }
+        if err := json.Unmarshal(req.Params, &params); err != nil { rpcError(w, 200, req.ID, -32602, "invalid parameters"); return }
+        b, exists := tools[params.Name]
+        if !exists { rpcError(w, 200, req.ID, -32602, "unknown tool"); return }
+        var schema struct { Required []string `json:"required"` }
+        _ = json.Unmarshal(b.Tool.InputSchema, &schema)
+        for _, key := range schema.Required {
+            if value, exists := params.Arguments[key]; !exists || value == nil { rpcError(w, 200, req.ID, -32602, "missing argument: " + key); return }
+        }
+        called, err := invoke(r.Context(), b, params.Arguments, r.Header.Get("traceparent"))
+        if err != nil { called = callResult{Content:[]contentBlock{{Type:"text", Text:err.Error()}}, IsError:true} }
+        result = called
+    default:
+        rpcError(w, 200, req.ID, -32601, "method not found"); return
+    }
+    writeJSON(w, 200, map[string]any{"jsonrpc":"2.0", "id":req.ID, "result":result})
+}
+
+func invoke(ctx context.Context, b binding, args map[string]any, traceparent string) (callResult, error) {
+    req, err := newRESTRequest(ctx, b.RequestBinding, spec.OverrideBaseURL, args, traceparent, os.Getenv("REST_BEARER_TOKEN"))
+    if err != nil { return callResult{}, err }
+    response, err := client.Do(req)
+    if err != nil { return callResult{}, safeRESTError(err) }
+    defer response.Body.Close()
+    raw, err := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
+    if err != nil { return callResult{}, err }
+    if len(raw) > 4<<20 { return callResult{}, fmt.Errorf("REST response exceeds 4 MiB") }
+    return callResult{Content:[]contentBlock{{Type:"text", Text:string(raw)}}, IsError:response.StatusCode>=400}, nil
+}
+
+__REQUEST_HELPERS__

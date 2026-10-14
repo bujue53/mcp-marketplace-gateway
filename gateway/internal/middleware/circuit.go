@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yafeng/mcp-marketplace/gateway/internal/metrics"
+	"github.com/bujue53/mcp-marketplace-gateway/gateway/internal/metrics"
 )
 
 type cbState int
@@ -17,10 +17,14 @@ const (
 
 type cbEntry struct {
 	state    cbState
-	failures int
-	success  int
+	samples  []cbSample
 	openedAt time.Time
 	inFlight int
+}
+
+type cbSample struct {
+	at      time.Time
+	success bool
 }
 
 // CircuitBreaker 每个 key 独立的熔断器：closed -> open -> halfOpen -> closed。
@@ -31,14 +35,28 @@ type CircuitBreaker struct {
 	failRatio  float64
 	minSamples int
 	interval   time.Duration
+	window     time.Duration
 }
 
-func NewCircuitBreaker(failRatio float64, minSamples int, interval time.Duration) *CircuitBreaker {
+func NewCircuitBreaker(failRatio float64, minSamples int, interval, window time.Duration) *CircuitBreaker {
+	if failRatio <= 0 || failRatio > 1 {
+		failRatio = 0.5
+	}
+	if minSamples < 1 {
+		minSamples = 1
+	}
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	if window <= 0 {
+		window = 30 * time.Second
+	}
 	return &CircuitBreaker{
 		entries:    map[string]*cbEntry{},
 		failRatio:  failRatio,
 		minSamples: minSamples,
 		interval:   interval,
+		window:     window,
 	}
 }
 
@@ -55,7 +73,7 @@ func (c *CircuitBreaker) Allow(key string) bool {
 	case cbOpen:
 		if now.Sub(e.openedAt) >= c.interval {
 			e.state = cbHalfOpen
-			e.inFlight = 0
+			e.inFlight = 1
 			metrics.SetCircuit(key, false)
 			return true
 		}
@@ -78,29 +96,46 @@ func (c *CircuitBreaker) Record(key string, ok bool) {
 	now := time.Now()
 
 	if ok {
-		e.success++
 		e.inFlight = 0
-		if e.state == cbHalfOpen || (e.state == cbClosed && e.failures > 0) {
+		if e.state == cbHalfOpen {
 			e.state = cbClosed
-			e.failures = 0
-			e.success = 0
+			e.samples = nil
+			metrics.SetCircuit(key, false)
+			return
 		}
-		metrics.SetCircuit(key, false)
-		return
 	}
 
-	e.failures++
 	e.inFlight = 0
-	total := e.failures + e.success
 	if e.state == cbHalfOpen {
 		e.state = cbOpen
 		e.openedAt = now
+		e.samples = nil
 		metrics.SetCircuit(key, true)
 		return
 	}
-	if total >= c.minSamples && float64(e.failures)/float64(total) >= c.failRatio {
+	if e.state != cbClosed {
+		return
+	}
+
+	e.samples = append(e.samples, cbSample{at: now, success: ok})
+	cutoff := now.Add(-c.window)
+	first := 0
+	for first < len(e.samples) && e.samples[first].at.Before(cutoff) {
+		first++
+	}
+	if first > 0 {
+		e.samples = append([]cbSample(nil), e.samples[first:]...)
+	}
+	failures := 0
+	for _, sample := range e.samples {
+		if !sample.success {
+			failures++
+		}
+	}
+	if len(e.samples) >= c.minSamples && float64(failures)/float64(len(e.samples)) >= c.failRatio {
 		e.state = cbOpen
 		e.openedAt = now
+		e.samples = nil
 		metrics.SetCircuit(key, true)
 	}
 }
@@ -113,4 +148,3 @@ func (c *CircuitBreaker) get(key string) *cbEntry {
 	}
 	return e
 }
-
